@@ -11,6 +11,7 @@ Requires-Dist: pyyaml>=6.0.2
 Requires-Dist: httpx>=0.26.0
 Requires-Dist: pydantic>=2.6.0
 Requires-Dist: pytest>=8.0.0
+Requires-Dist: python-dotenv>=1.0.1
 
 # Portable Agent Runner
 

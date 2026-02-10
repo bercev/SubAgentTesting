@@ -5,6 +5,7 @@ from typing import List, Optional
 
 import typer
 from rich import print
+from dotenv import load_dotenv
 
 from agents.spec_loader import AgentSpecLoader
 from benchmarks.registry import BenchmarkRegistry
@@ -14,6 +15,7 @@ from runtime.schemas import AgentResult
 from runtime.tools import ToolContext, ToolRegistry
 
 app = typer.Typer(add_completion=False)
+load_dotenv()
 
 
 @app.command()
