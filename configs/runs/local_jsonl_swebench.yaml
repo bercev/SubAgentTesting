@@ -1,0 +1,23 @@
+benchmark:
+  name: swebench_verified
+  dataset_name: SWE-bench/SWE-bench_Verified
+  split: test
+  data_source: local
+  data_root: /path/to/local/jsonl
+
+evaluation:
+  enabled: true
+  harness_cmd: python -m swebench.harness.run_evaluation
+  eval_root: ./external/SWE-bench
+  workdir: .
+  report_dir: logs/reports
+
+runtime:
+  mode: patch_only
+  selector: 5
+  max_tool_calls: 20
+  max_wall_time_s: 600
+
+output:
+  runs_dir: runs
+  logs_dir: logs

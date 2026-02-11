@@ -1,0 +1,9 @@
+data_source: hf            # hf | local
+data_root: /path/to/jsonl  # only if local
+eval_root: ./external/SWE-bench
+
+harness_cmd: "python -m swebench.harness.run_evaluation"
+dataset_name: "SWE-bench/SWE-bench_Verified"
+
+default_split: test
+runs_dir: runs

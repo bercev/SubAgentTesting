@@ -1,0 +1,25 @@
+name: openrouter-free
+backend:
+  type: openrouter
+  model: openrouter/free
+prompt_template: |
+  You are an engineering agent solving software tasks.
+  Use tools only as needed.
+  {skills}
+  Terminate by calling submit(final_artifact).
+
+tools: []
+skills:
+  - tool-use-protocol
+  - repo-triage
+  - diff-hygiene
+  - test-triage-loop
+
+tool_to_skill_map: {}
+termination:
+  tool: submit
+  output_type: patch
+decoding_defaults:
+  temperature: 0.1
+  top_p: 0.95
+  max_tokens: 512

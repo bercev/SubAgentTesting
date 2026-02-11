@@ -1,11 +1,13 @@
 import json
-import os
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 import typer
-from rich import print
+import yaml
 from dotenv import load_dotenv
+from rich import print
 
 from agents.spec_loader import AgentSpecLoader
 from benchmarks.registry import BenchmarkRegistry
@@ -18,108 +20,290 @@ app = typer.Typer(add_completion=False)
 load_dotenv()
 
 
-@app.command()
-def list():
-    """List available agents and benchmarks."""
-    agents = [p.name for p in Path("agents").glob("*.yaml")]
-    benchmarks = ["swebench_verified"]
-    print({"agents": agents, "benchmarks": benchmarks})
+def _default_run_config() -> Dict[str, Any]:
+    return {
+        "benchmark": {
+            "name": "swebench_verified",
+            "dataset_name": "SWE-bench/SWE-bench_Verified",
+            "split": "test",
+            "data_source": "hf",
+            "data_root": None,
+        },
+        "evaluation": {
+            "enabled": True,
+            "harness_cmd": "python -m swebench.harness.run_evaluation",
+            "eval_root": "./external/SWE-bench",
+            "workdir": ".",
+            "report_dir": "logs/reports",
+        },
+        "runtime": {
+            "mode": "patch_only",
+            "selector": 5,
+            "max_tool_calls": 20,
+            "max_wall_time_s": 600,
+        },
+        "output": {
+            "runs_dir": "runs",
+            "logs_dir": "logs",
+        },
+    }
 
 
-def _build_backend(kind: str, model: Optional[str]) -> OpenRouterBackend:
-    if kind == "openrouter":
-        return OpenRouterBackend(model=model)
-    raise ValueError(f"Unknown backend type {kind}")
+def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    merged = deepcopy(base)
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        elif value is not None:
+            merged[key] = value
+    return merged
+
+
+def _normalize_run_config(raw_config: Dict[str, Any]) -> Dict[str, Any]:
+    defaults = _default_run_config()
+    if any(key in raw_config for key in ("benchmark", "evaluation", "runtime", "output")):
+        return _deep_merge(defaults, raw_config)
+
+    # Legacy flat config compatibility
+    legacy_as_nested = {
+        "benchmark": {
+            "name": raw_config.get("benchmark"),
+            "dataset_name": raw_config.get("dataset_name"),
+            "split": raw_config.get("default_split") or raw_config.get("split"),
+            "data_source": raw_config.get("data_source"),
+            "data_root": raw_config.get("data_root"),
+        },
+        "evaluation": {
+            "harness_cmd": raw_config.get("harness_cmd"),
+            "eval_root": raw_config.get("eval_root"),
+        },
+        "runtime": {
+            "mode": raw_config.get("mode"),
+            "selector": raw_config.get("selector"),
+        },
+        "output": {
+            "runs_dir": raw_config.get("runs_dir"),
+            "logs_dir": raw_config.get("logs_dir"),
+        },
+    }
+    return _deep_merge(defaults, legacy_as_nested)
+
+
+def _load_run_config(run_config_path: Path) -> Dict[str, Any]:
+    if not run_config_path.exists():
+        raise FileNotFoundError(
+            "Missing run config: "
+            f"{run_config_path}. Create one from `configs/runs/example.swebench_verified.hf.yaml`."
+        )
+    with run_config_path.open("r", encoding="utf-8") as config_file:
+        raw_config = yaml.safe_load(config_file) or {}
+    return _normalize_run_config(raw_config)
+
+
+def _sanitize_model_name(model: str) -> str:
+    return model.replace("/", "_").replace(":", "_")
+
+
+def _normalize_mode(mode_value: str) -> str:
+    aliases = {
+        "A": "patch_only",
+        "PATCH_ONLY": "patch_only",
+        "PATCH-ONLY": "patch_only",
+        "SUBMIT_ONLY": "patch_only",
+        "B": "tools_enabled",
+        "TOOLS_ENABLED": "tools_enabled",
+        "TOOLS-ENABLED": "tools_enabled",
+        "TOOLS": "tools_enabled",
+    }
+    normalized = aliases.get(str(mode_value).strip().upper())
+    if normalized:
+        return normalized
+    raise ValueError(
+        f"Unsupported mode '{mode_value}'. Use one of: patch_only, tools_enabled (legacy: A, B)."
+    )
+
+
+def _build_backend(backend_config: Dict[str, Any]) -> OpenRouterBackend:
+    backend_type = backend_config.get("type", "openrouter")
+    if backend_type == "openrouter":
+        model_id = backend_config.get("model")
+        if not model_id:
+            raise ValueError("Missing model id in agent spec backend.model")
+        return OpenRouterBackend(
+            model=model_id,
+            base_url=backend_config.get("base_url", "https://openrouter.ai/api/v1"),
+        )
+    raise ValueError(f"Unsupported backend type: {backend_type}")
 
 
 def _filter_tool_schemas(registry: ToolRegistry, allowed: set) -> List[dict]:
     schemas = []
-    for s in registry.schemas:
-        name = s.get("function", {}).get("name")
+    for schema in registry.schemas:
+        name = schema.get("function", {}).get("name")
         if name in allowed:
-            schemas.append(s)
+            schemas.append(schema)
     return schemas
+
+
+def _build_adapter_from_config(config: Dict[str, Any], benchmark_name: str):
+    benchmark_config = config["benchmark"]
+    evaluation_config = config["evaluation"]
+    adapter_cls = BenchmarkRegistry().get_adapter(benchmark_name)
+    return adapter_cls(
+        data_source=benchmark_config.get("data_source", "hf"),
+        data_root=benchmark_config.get("data_root"),
+        dataset_name=benchmark_config.get("dataset_name", "SWE-bench/SWE-bench_Verified"),
+        eval_root=evaluation_config.get("eval_root"),
+        harness_cmd=evaluation_config.get("harness_cmd"),
+        workdir=evaluation_config.get("workdir"),
+        report_dir=evaluation_config.get("report_dir"),
+    )
+
+
+@app.command()
+def list():
+    """List available agents, benchmarks, and run configs."""
+    agents = [path.name for path in Path("agents").glob("*.yaml")]
+    benchmarks = ["swebench_verified"]
+    run_configs = [path.name for path in Path("configs/runs").glob("*.yaml")]
+    print({"agents": agents, "benchmarks": benchmarks, "run_configs": run_configs})
 
 
 @app.command()
 def run(
-    agent: str = typer.Option("agents/qwen2_5_coder.yaml", help="Agent spec path"),
-    benchmark: str = typer.Option("swebench_verified"),
-    split: str = typer.Option("dev"),
-    selector: Optional[int] = typer.Option(None, help="Number of tasks"),
-    mode: str = typer.Option("B", help="Mode A (patch-only) or B (tools-enabled)"),
+    agent: str = typer.Option("agents/qwen2_5_coder.yaml", help="Agent profile path"),
+    benchmark: Optional[str] = typer.Option(None, help="Benchmark override"),
+    split: Optional[str] = typer.Option(None, help="Split override"),
+    selector: Optional[int] = typer.Option(None, help="Number of tasks override"),
+    mode: Optional[str] = typer.Option(None, help="Mode override: patch_only or tools_enabled"),
+    run_config: str = typer.Option("configs/runs/default.yaml", help="Run config path"),
 ):
+    config = _load_run_config(Path(run_config))
+    if benchmark:
+        config["benchmark"]["name"] = benchmark
+    if split:
+        config["benchmark"]["split"] = split
+    if selector is not None:
+        config["runtime"]["selector"] = selector
+    if mode:
+        config["runtime"]["mode"] = mode
+
+    benchmark_name = config["benchmark"]["name"]
+    split_name = config["benchmark"]["split"]
+    mode_name = _normalize_mode(str(config["runtime"]["mode"]))
+
     base_dir = Path.cwd()
-    loader = AgentSpecLoader(base_dir)
-    spec, prompt, allowed_tools = loader.load(Path(agent))
+    spec_loader = AgentSpecLoader(base_dir)
+    spec, prompt, allowed_tools = spec_loader.load(Path(agent))
 
-    registry = BenchmarkRegistry()
-    adapter_cls = registry.get_adapter(benchmark)
-    adapter = adapter_cls()
-    tasks = adapter.load_tasks(split, selector)
+    adapter = _build_adapter_from_config(config, benchmark_name)
+    tasks = adapter.load_tasks(split_name, config["runtime"].get("selector"))
 
-    results: List[AgentResult] = []
-    for task in tasks:
-        workspace_root = adapter.workspace_root_for_task(task)
-        submitted_artifact: dict = {}
+    model_name = _sanitize_model_name(spec.backend.get("model", spec.name))
+    date_tag = datetime.now().strftime("%Y-%m-%d_%H%M")
+    runs_dir = Path(config["output"].get("runs_dir", "runs"))
+    out_path = runs_dir / model_name / split_name / mode_name / f"{date_tag}_predictions.jsonl"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-        def _submit_cb(artifact: str):
-            submitted_artifact["artifact"] = artifact
+    with out_path.open("w", encoding="utf-8") as out_file:
+        for task in tasks:
+            workspace_root = adapter.workspace_root_for_task(task)
+            submitted_artifact: Dict[str, str] = {}
 
-        tool_ctx = ToolContext(workspace_root=workspace_root, submit_callback=_submit_cb)
-        tool_registry = ToolRegistry(tool_ctx)
+            def _submit_callback(artifact: str):
+                submitted_artifact["artifact"] = artifact
 
-        if mode.upper() == "A":
-            backend = _build_backend(spec.backend.get("type", "openrouter"), spec.backend.get("model"))
-            allowed = {"submit"}
-        else:
-            backend = _build_backend(spec.backend.get("type", "openrouter"), spec.backend.get("model"))
-            allowed = allowed_tools or set([s.get("function", {}).get("name") for s in tool_registry.schemas])
-        tool_schemas = _filter_tool_schemas(tool_registry, allowed)
+            tool_ctx = ToolContext(workspace_root=workspace_root, submit_callback=_submit_callback)
+            tool_registry = ToolRegistry(tool_ctx)
 
-        runtime = AgentRuntime(
-            backend=backend,
-            tool_registry=tool_registry,
-            allowed_tools=allowed,
-            max_tool_calls=20,
-            max_wall_time_s=600,
-        )
+            backend = _build_backend(spec.backend)
+            if mode_name == "patch_only":
+                allowed = {"submit"}
+                tool_schemas = None
+            else:
+                allowed = allowed_tools or {
+                    schema.get("function", {}).get("name") for schema in tool_registry.schemas
+                }
+                tool_schemas = _filter_tool_schemas(tool_registry, allowed)
 
-        result = runtime.run(
-            task=task,
-            prompt=prompt,
-            tool_schemas=tool_schemas,
-            decoding_defaults=spec.decoding_defaults,
-        )
-        if submitted_artifact.get("artifact"):
-            result.final_artifact = submitted_artifact["artifact"]
-        results.append(result)
-        print({"task": task.task_id, "terminated": result.metadata.get("terminated")})
+            runtime = AgentRuntime(
+                backend=backend,
+                tool_registry=tool_registry,
+                allowed_tools=allowed,
+                max_tool_calls=config["runtime"].get("max_tool_calls", 20),
+                max_wall_time_s=config["runtime"].get("max_wall_time_s", 600),
+            )
 
-    # Persist predictions for SWE-bench shape
-    evalr = adapter.get_evaluator()
-    out_path = Path("runs/predictions.jsonl")
-    evalr.write_predictions(results, spec.name, out_path)
+            result = runtime.run(
+                task=task,
+                prompt=prompt,
+                tool_schemas=tool_schemas,
+                decoding_defaults=spec.decoding_defaults,
+            )
+            if submitted_artifact.get("artifact"):
+                result.final_artifact = submitted_artifact["artifact"]
+
+            record = {
+                "instance_id": result.task_id,
+                "model_patch": result.final_artifact,
+                "model_name_or_path": spec.backend.get("model", spec.name),
+                "model_name": spec.name,
+                "repo": result.metadata.get("repo") if result.metadata else None,
+            }
+            out_file.write(json.dumps(record) + "\n")
+            out_file.flush()
+            print({"task": task.task_id, "terminated": result.metadata.get("terminated")})
+
     print(f"Wrote predictions to {out_path}")
 
 
 @app.command()
 def predict(
     agent: str = typer.Option("agents/qwen2_5_coder.yaml"),
-    split: str = typer.Option("dev"),
+    split: Optional[str] = typer.Option(None),
     selector: Optional[int] = typer.Option(1),
+    run_config: str = typer.Option("configs/runs/default.yaml"),
 ):
-    # Reuse run logic in Mode A (patch-only)
-    run(agent=agent, benchmark="swebench_verified", split=split, selector=selector, mode="A")
+    run(
+        agent=agent,
+        benchmark=None,
+        split=split,
+        selector=selector,
+        mode="patch_only",
+        run_config=run_config,
+    )
 
 
 @app.command()
 def eval(
     predictions: str = typer.Argument("runs/predictions.jsonl"),
+    run_config: str = typer.Option("configs/runs/default.yaml"),
+    benchmark: Optional[str] = typer.Option(None, help="Benchmark override"),
 ):
-    adapter = BenchmarkRegistry().get_adapter("swebench_verified")()
+    config = _load_run_config(Path(run_config))
+    if benchmark:
+        config["benchmark"]["name"] = benchmark
+
+    benchmark_name = config["benchmark"]["name"]
+    adapter = _build_adapter_from_config(config, benchmark_name)
     evaluator = adapter.get_evaluator()
-    proc = evaluator.run_harness(Path(predictions))
+
+    predictions_path = Path(predictions)
+    split_name = config["benchmark"]["split"]
+    runs_dir = Path(config["output"].get("runs_dir", "runs"))
+    try:
+        parts = predictions_path.parts
+        if runs_dir.name in parts:
+            split_name = parts[parts.index(runs_dir.name) + 2]
+    except Exception:
+        pass
+
+    proc = evaluator.run_harness(
+        predictions_path=predictions_path,
+        dataset_name=config["benchmark"]["dataset_name"],
+        split=split_name,
+        run_id=datetime.now().strftime("%Y-%m-%d_%H%M%S"),
+    )
     print(proc.stdout)
     if proc.returncode != 0:
         print(proc.stderr)

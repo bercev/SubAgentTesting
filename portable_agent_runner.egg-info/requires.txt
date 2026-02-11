@@ -5,3 +5,5 @@ httpx>=0.26.0
 pydantic>=2.6.0
 pytest>=8.0.0
 python-dotenv>=1.0.1
+datasets>=2.19.0
+ijson>=3.2.3

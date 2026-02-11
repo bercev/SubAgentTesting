@@ -12,8 +12,14 @@ node_modules/
 
 # venvs
 .venv/
+
+# external
+external/
+
 # testing
 /coverage
+/logs
+/runs
 
 # next.js
 /.next/
@@ -35,6 +41,7 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env
 .secrets*
+config.yaml
 
 # vercel
 .vercel

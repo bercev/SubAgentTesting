@@ -1,3 +1,4 @@
+import json
 import time
 from typing import Any, Dict, List, Optional, Set
 
@@ -48,14 +49,23 @@ class AgentRuntime:
             tools = tool_schemas if tool_schemas else None
             result: GenerationResult = self.backend.generate(messages, tools=tools, decoding=decoding_defaults)
             assistant_msg = {"role": "assistant", "content": result.assistant_text}
+            tool_call_ids: List[str] = []
             if result.tool_calls:
-                assistant_msg["tool_calls"] = [
-                    {
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": tc.arguments},
-                    }
-                    for tc in result.tool_calls
-                ]
+                tool_calls_payload = []
+                for idx, tc in enumerate(result.tool_calls):
+                    call_id = f"call_{tool_calls_made}_{idx}"
+                    tool_call_ids.append(call_id)
+                    tool_calls_payload.append(
+                        {
+                            "id": call_id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.name,
+                                "arguments": json.dumps(tc.arguments),
+                            },
+                        }
+                    )
+                assistant_msg["tool_calls"] = tool_calls_payload
             messages.append(assistant_msg)
 
             if not result.tool_calls:
@@ -64,20 +74,28 @@ class AgentRuntime:
                 terminated = True
                 break
 
-            for tc in result.tool_calls:
+            for idx, tc in enumerate(result.tool_calls):
                 tool_calls_made += 1
                 if self.allowed_tools and tc.name not in self.allowed_tools:
                     messages.append(
                         {
                             "role": "tool",
                             "name": tc.name,
+                            "tool_call_id": tool_call_ids[idx] if idx < len(tool_call_ids) else "unknown",
                             "content": f"Tool {tc.name} not allowed",
                         }
                     )
                     continue
 
                 tool_result = self.tool_registry.execute(tc.name, tc.arguments)
-                messages.append({"role": "tool", "name": tc.name, "content": str(tool_result)})
+                messages.append(
+                    {
+                        "role": "tool",
+                        "name": tc.name,
+                        "tool_call_id": tool_call_ids[idx] if idx < len(tool_call_ids) else "unknown",
+                        "content": str(tool_result),
+                    }
+                )
 
                 if tc.name == "submit" and tool_result.get("submitted"):
                     final_artifact = tc.arguments.get("final_artifact", "")

@@ -12,6 +12,8 @@ Requires-Dist: httpx>=0.26.0
 Requires-Dist: pydantic>=2.6.0
 Requires-Dist: pytest>=8.0.0
 Requires-Dist: python-dotenv>=1.0.1
+Requires-Dist: datasets>=2.19.0
+Requires-Dist: ijson>=3.2.3
 
 # Portable Agent Runner
 
@@ -21,7 +23,8 @@ Python + uv-based agent runtime supporting model backends and benchmark adapters
 
 ```
 pip install -e .
-cp .env.example .env  # fill OPENROUTER_API_KEY, paths
+cp .env.example .env  # fill OPENROUTER_API_KEY
+cp config.example.yaml config.yaml
 ```
 
 ## Commands
@@ -30,7 +33,112 @@ cp .env.example .env  # fill OPENROUTER_API_KEY, paths
 - `agent run --mode A` — patch-only smoke (no tools)
 - `agent run --mode B` — tools-enabled run
 - `agent predict` — batch Mode A to predictions.jsonl
-- `agent eval runs/predictions.jsonl` — run official harness (set `HARNESS_CMD`)
+- `agent eval runs/.../predictions.jsonl` — run official harness (config.yaml)
+
+## Config
+
+`config.yaml` controls data source and evaluation paths:
+
+```yaml
+data_source: hf
+data_root: /path/to/jsonl
+eval_root: /path/to/SWE-bench-repo
+harness_cmd: "python -m swebench.harness.run"
+default_split: test
+runs_dir: runs
+```
+
+## End-to-End Pipeline
+
+This repo produces predictions for SWE-bench (or other benchmarks) and optionally evaluates them with the official harness.
+
+### 1) Install dependencies
+
+```
+pip install -e .
+```
+
+### 2) Configure API keys
+
+Create `.env` and set your OpenRouter key:
+
+```
+OPENROUTER_API_KEY=your_key_here
+```
+
+### 3) Configure dataset + evaluation
+
+Copy and edit `config.yaml`:
+
+```
+cp config.example.yaml config.yaml
+```
+
+Pick one data source:
+
+- HF (no local download needed):
+  ```yaml
+  data_source: hf
+  ```
+- Local JSONL:
+  ```yaml
+  data_source: local
+  data_root: /path/to/jsonl
+  ```
+
+If you want to evaluate with the harness, set:
+
+```yaml
+eval_root: /path/to/SWE-bench-repo
+harness_cmd: "python -m swebench.harness.run"
+```
+
+### 4) Choose an agent/model
+
+Agent specs live under `agents/`. Examples:
+
+- `agents/openrouter_free.yaml` (OpenRouter free router)
+- `agents/qwen3_next_80b_free.yaml`
+- `agents/qwen2_5_coder.yaml`
+
+### 5) Run predictions (Mode A or B)
+
+Patch-only (no tools, safest across models):
+
+```
+agent run --agent agents/openrouter_free.yaml --mode A --selector 10 --split test
+```
+
+Tools-enabled (requires provider tool support and local repos for workspace tools):
+
+```
+agent run --agent agents/openrouter_free.yaml --mode B --selector 10 --split test
+```
+
+Predictions are written to:
+
+```
+runs/<model>/<split>/<mode>/<YYYY-MM-DD_HHMM>_predictions.jsonl
+```
+
+### 6) Evaluate (optional)
+
+If `eval_root` and `harness_cmd` are set:
+
+```
+agent eval runs/<model>/<split>/<mode>/<YYYY-MM-DD_HHMM>_predictions.jsonl
+```
+
+### 7) Compare runs
+
+Run Mode A and Mode B separately and compare harness results:
+
+```
+agent run --agent agents/openrouter_free.yaml --mode A --selector 10 --split test
+agent run --agent agents/openrouter_free.yaml --mode B --selector 10 --split test
+```
+
+Then evaluate each predictions file.
 
 ## Tests
 

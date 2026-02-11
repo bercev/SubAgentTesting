@@ -11,5 +11,6 @@ class BenchmarkRegistry:
 
     def get_adapter(self, name: str):
         if name not in self._registry:
-            raise KeyError(f"Unknown benchmark {name}")
+            supported = ", ".join(sorted(self._registry.keys()))
+            raise KeyError(f"Unknown benchmark '{name}'. Supported benchmarks: {supported}")
         return self._registry[name]

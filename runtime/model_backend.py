@@ -47,6 +47,9 @@ class OpenRouterBackend(ModelBackend):
         self.tool_call_extractor = tool_call_extractor or self._extract_tool_calls_from_text
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is required")
+        # OpenRouter expects provider-prefixed model ids (e.g., qwen/qwen2.5-coder-0.5b-instruct).
+        if "/" not in self.model and self.model.startswith("qwen"):
+            self.model = f"qwen/{self.model}"
 
     def generate(
         self,
@@ -69,7 +72,13 @@ class OpenRouterBackend(ModelBackend):
 
         with httpx.Client(timeout=httpx.Timeout(60.0)) as client:
             response = client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
-            response.raise_for_status()
+            if response.status_code >= 400:
+                detail = response.text[:2000]
+                raise httpx.HTTPStatusError(
+                    f"OpenRouter error {response.status_code}: {detail}",
+                    request=response.request,
+                    response=response,
+                )
             data = response.json()
 
         choice = data.get("choices", [{}])[0]
