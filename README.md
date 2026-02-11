@@ -1,6 +1,10 @@
 # Portable Agent Runner
 
-Portable benchmark runner with pluggable agent profiles (`agents/*.yaml`) and run configurations (`configs/runs/*.yaml`).
+End-to-end pipeline for benchmarking code-editing agents on SWE-bench: it bootstraps the environment, composes an agent profile with a run config, runs the agent to generate patches, and evaluates them with the SWE-bench harness while saving outputs in a portable layout.
+
+- Agent behavior comes from `agents/*.yaml` (model/backend, prompts, skills).
+- Execution policy and dataset wiring come from `configs/runs/*.yaml`.
+- `agent run` produces prediction JSONL files; `agent eval` scores them and stores logs/reports.
 
 ## Quick Start
 
