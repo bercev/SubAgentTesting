@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 import scripts.cli as cli
 from agents.spec_loader import AgentSpec
 from runtime.schemas import AgentResult, BenchmarkTask
@@ -33,7 +35,7 @@ class _FakeAdapter:
         }
 
 
-def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str) -> dict:
+def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool = False):
     task = BenchmarkTask(
         task_id="astropy__astropy-12907",
         instruction="Fix issue",
@@ -64,8 +66,7 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str) -> dict:
             "max_wall_time_s": 10,
         },
         "output": {
-            "runs_dir": str(tmp_path / "runs"),
-            "logs_dir": str(tmp_path / "logs"),
+            "artifacts_dir": str(tmp_path / "artifacts"),
         },
     }
 
@@ -104,16 +105,22 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str) -> dict:
         selector=None,
         mode="patch_only",
         run_config="ignored.yaml",
+        verbose=verbose,
     )
-    out_files = list((tmp_path / "runs").glob("*/*/*/*_predictions.jsonl"))
+    out_files = list((tmp_path / "artifacts").glob("*/predictions.jsonl"))
     assert len(out_files) == 1
     records = [json.loads(line) for line in out_files[0].read_text(encoding="utf-8").splitlines() if line]
     assert len(records) == 1
-    return records[0]
+    run_root = out_files[0].parent
+    manifest_path = run_root / "manifest.json"
+    run_log_path = run_root / "run.log"
+    assert manifest_path.exists()
+    assert run_log_path.exists()
+    return records[0], out_files[0], manifest_path, run_log_path
 
 
 def test_cli_writes_empty_patch_for_invalid_patch_output(monkeypatch, tmp_path: Path):
-    record = _run_once(monkeypatch, tmp_path, raw_artifact="I'll inspect files first.")
+    record, _, _, _ = _run_once(monkeypatch, tmp_path, raw_artifact="I'll inspect files first.")
     assert record["instance_id"] == "astropy__astropy-12907"
     assert record["model_patch"] == ""
 
@@ -128,5 +135,52 @@ def test_cli_preserves_valid_patch_output(monkeypatch, tmp_path: Path):
         "-old\n"
         "+new\n"
     )
-    record = _run_once(monkeypatch, tmp_path, raw_artifact=valid_patch)
+    record, _, _, _ = _run_once(monkeypatch, tmp_path, raw_artifact=valid_patch)
     assert record["model_patch"] == valid_patch
+
+
+def test_cli_creates_manifest(monkeypatch, tmp_path: Path):
+    record, predictions_path, manifest_path, _ = _run_once(monkeypatch, tmp_path, raw_artifact="")
+    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert payload["run_id"] == manifest_path.parent.name
+    assert payload["predictions_path"] == str(predictions_path.resolve())
+    assert payload["model_name"] == "fake-agent"
+    assert payload["model_name_or_path"] == "fake/model"
+    assert payload["evaluation"]["status"] == "not_run"
+    assert payload["benchmark_name"] == "swebench_verified"
+    assert payload["dataset_name"] == "SWE-bench/SWE-bench_Verified"
+    assert payload["split"] == "test"
+    assert payload["mode"] == "patch_only"
+    assert record["instance_id"] == "astropy__astropy-12907"
+
+
+def test_cli_quiet_default_suppresses_per_task_logs(monkeypatch, tmp_path: Path, capsys):
+    _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=False)
+    out = capsys.readouterr().out
+    assert "artifact_valid" not in out
+    assert "Predictions written to" in out
+
+
+def test_cli_writes_run_log_file(monkeypatch, tmp_path: Path):
+    _, _, _, run_log_path = _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=False)
+    content = run_log_path.read_text(encoding="utf-8")
+    assert "Starting run:" in content
+    assert "Run summary:" in content
+
+
+def test_derive_run_id_from_artifacts_path(tmp_path: Path):
+    artifacts_dir = tmp_path / "artifacts"
+    run_id = "2026-02-13_010203"
+    p = artifacts_dir / run_id / "predictions.jsonl"
+    p.parent.mkdir(parents=True)
+    p.write_text("", encoding="utf-8")
+    assert cli._derive_run_id_from_predictions(p, artifacts_dir) == run_id
+
+
+def test_derive_run_id_rejects_non_canonical_layout(tmp_path: Path):
+    artifacts_dir = tmp_path / "artifacts"
+    p = artifacts_dir / "2026-02-13_010203" / "predictions" / "model" / "test" / "patch_only" / "predictions.jsonl"
+    p.parent.mkdir(parents=True)
+    p.write_text("", encoding="utf-8")
+    with pytest.raises(ValueError):
+        cli._derive_run_id_from_predictions(p, artifacts_dir)

@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional, cast
 
 from runtime.schemas import BenchmarkTask
 
@@ -54,7 +54,11 @@ class SWEbenchVerifiedAdapter:
 
             with path.open("r", encoding="utf-8") as f:
                 for record in ijson.items(f, "item"):
-                    task = self._record_to_task(record)
+                    if not isinstance(record, dict):
+                        raise ValueError(
+                            f"Invalid record type in {path}: expected object, got {type(record).__name__}"
+                        )
+                    task = self._record_to_task(cast(Mapping[str, Any], record))
                     tasks.append(task)
                     if selector and len(tasks) >= selector:
                         break
@@ -62,7 +66,11 @@ class SWEbenchVerifiedAdapter:
             with path.open("r", encoding="utf-8") as f:
                 for line in f:
                     record = json.loads(line)
-                    task = self._record_to_task(record)
+                    if not isinstance(record, dict):
+                        raise ValueError(
+                            f"Invalid record type in {path}: expected object, got {type(record).__name__}"
+                        )
+                    task = self._record_to_task(cast(Mapping[str, Any], record))
                     tasks.append(task)
                     if selector and len(tasks) >= selector:
                         break
@@ -77,31 +85,45 @@ class SWEbenchVerifiedAdapter:
         tasks: List[BenchmarkTask] = []
         count = selector or len(ds)
         for record in ds.select(range(min(count, len(ds)))):  # type: ignore[arg-type]
-            tasks.append(self._record_to_task(record))
+            if not isinstance(record, dict):
+                raise ValueError(
+                    f"Invalid record type in dataset split '{hf_split}': "
+                    f"expected object, got {type(record).__name__}"
+                )
+            tasks.append(self._record_to_task(cast(Mapping[str, Any], record)))
         return tasks
 
-    def _record_to_task(self, record: Dict[str, Any]) -> BenchmarkTask:
-        instruction = (
-            record.get("problem_statement")
-            or record.get("task_description")
-            or record.get("prompt")
-            or record.get("issue")
-            or record.get("title")
-            or ""
-        )
+    def _record_to_task(self, record: Mapping[str, Any]) -> BenchmarkTask:
+        instance_id_raw = record.get("instance_id")
+        if not isinstance(instance_id_raw, str) or not instance_id_raw.strip():
+            raise ValueError(f"Invalid or missing instance_id: {instance_id_raw!r}")
+        instance_id = instance_id_raw.strip()
+
+        instruction = ""
+        for key in ("problem_statement", "task_description", "prompt", "issue", "title"):
+            value = record.get(key)
+            if isinstance(value, str) and value.strip():
+                instruction = value.strip()
+                break
+
         if not instruction:
-            raise ValueError(f"Empty instruction for instance_id={record.get('instance_id')}")
+            raise ValueError(f"Empty instruction for instance_id={instance_id}")
+
+        repo_raw = record.get("repo")
+        repo = repo_raw if isinstance(repo_raw, str) and repo_raw.strip() else None
+        resources: Dict[str, Any] = {"repo": repo} if repo is not None else {}
+
         return BenchmarkTask(
-            task_id=record.get("instance_id"),
+            task_id=instance_id,
             instruction=instruction,
-            resources={"repo": record.get("repo")},
+            resources=resources,
             expected_output_type="patch",
         )
 
     def workspace_root_for_task(self, task: BenchmarkTask) -> Path:
         if self.data_root:
             repo = task.resources.get("repo") if task.resources else None
-            if repo:
+            if isinstance(repo, str) and repo:
                 return self.data_root / repo
             return self.data_root
         return Path(".")

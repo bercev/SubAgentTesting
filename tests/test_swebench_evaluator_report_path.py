@@ -12,6 +12,8 @@ def test_run_harness_relocates_summary_report_to_report_dir(monkeypatch, tmp_pat
     eval_root.mkdir(parents=True)
     report_dir = tmp_path / "logs" / "reports"
     report_dir.mkdir(parents=True)
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir(parents=True)
 
     predictions_path = tmp_path / "predictions.jsonl"
     record = {
@@ -32,9 +34,19 @@ def test_run_harness_relocates_summary_report_to_report_dir(monkeypatch, tmp_pat
     run_id = "2026-02-12_165543"
     source_name = f"qwen__qwen3-coder:free.{run_id}.json"
     source_path = workdir / source_name
+    source_harness_logs = (
+        workdir
+        / "logs"
+        / "run_evaluation"
+        / run_id
+        / "qwen__qwen3-coder:free"
+        / "astropy__astropy-12907"
+    )
 
     def _fake_run(*args, **kwargs):
         source_path.write_text("{}", encoding="utf-8")
+        source_harness_logs.mkdir(parents=True, exist_ok=True)
+        (source_harness_logs / "run_instance.log").write_text("hello", encoding="utf-8")
         return subprocess.CompletedProcess(
             args=args[0] if args else "",
             returncode=0,
@@ -48,10 +60,72 @@ def test_run_harness_relocates_summary_report_to_report_dir(monkeypatch, tmp_pat
         dataset_name="SWE-bench/SWE-bench_Verified",
         split="test",
         run_id=run_id,
+        artifacts_dir=artifacts_dir,
     )
 
-    relocated = report_dir / source_name
+    relocated = artifacts_dir / run_id / "report.json"
+    relocated_harness = artifacts_dir / run_id / "evaluation"
+    relocated_instance = relocated_harness / "astropy__astropy-12907"
     assert source_path.exists() is False
     assert relocated.exists() is True
     assert evaluator.last_summary_report == relocated.resolve()
+    assert source_harness_logs.exists() is False
+    assert relocated_harness.exists() is True
+    assert relocated_instance.exists() is True
+    assert (artifacts_dir / run_id / "evaluation" / "harness").exists() is False
+    assert evaluator.last_harness_log_root == relocated_harness.resolve()
     assert "Report relocated to" in proc.stdout
+    assert "Harness logs relocated to" in proc.stdout
+
+
+def test_run_harness_relocates_with_instance_collision(monkeypatch, tmp_path: Path):
+    workdir = tmp_path / "work"
+    workdir.mkdir(parents=True)
+    eval_root = tmp_path / "external" / "SWE-bench"
+    eval_root.mkdir(parents=True)
+    report_dir = tmp_path / "logs" / "reports"
+    report_dir.mkdir(parents=True)
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+
+    predictions_path = tmp_path / "predictions.jsonl"
+    predictions_path.write_text("{}", encoding="utf-8")
+
+    evaluator = SWEbenchEvaluator(
+        eval_root=eval_root,
+        harness_cmd="python -m swebench.harness.run_evaluation",
+        workdir=workdir,
+        report_dir=report_dir,
+    )
+    run_id = "2026-02-12_165544"
+    source_name = f"qwen__qwen3-coder:free.{run_id}.json"
+    source_path = workdir / source_name
+
+    model_a = workdir / "logs" / "run_evaluation" / run_id / "model-a" / "same-instance"
+    model_b = workdir / "logs" / "run_evaluation" / run_id / "model-b" / "same-instance"
+
+    def _fake_run(*args, **kwargs):
+        source_path.write_text("{}", encoding="utf-8")
+        model_a.mkdir(parents=True, exist_ok=True)
+        model_b.mkdir(parents=True, exist_ok=True)
+        (model_a / "run_instance.log").write_text("a", encoding="utf-8")
+        (model_b / "run_instance.log").write_text("b", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=args[0] if args else "",
+            returncode=0,
+            stdout=f"Report written to {source_name}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", _fake_run)
+    evaluator.run_harness(
+        predictions_path=predictions_path,
+        dataset_name="SWE-bench/SWE-bench_Verified",
+        split="test",
+        run_id=run_id,
+        artifacts_dir=artifacts_dir,
+    )
+
+    dest_root = artifacts_dir / run_id / "evaluation"
+    assert (dest_root / "same-instance").exists()
+    assert (dest_root / "same-instance__model-b").exists()

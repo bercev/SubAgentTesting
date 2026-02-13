@@ -1,5 +1,6 @@
 import json
 import re
+import shutil
 import subprocess
 import tempfile
 from pathlib import Path
@@ -21,6 +22,7 @@ class SWEbenchEvaluator:
         self.workdir = workdir
         self.report_dir = report_dir
         self.last_summary_report: "Path | None" = None
+        self.last_harness_log_root: "Path | None" = None
 
     def write_predictions(self, results: Iterable[AgentResult], model_name: str, out_path: Path) -> Path:
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -42,6 +44,7 @@ class SWEbenchEvaluator:
         dataset_name: str,
         split: str,
         run_id: str,
+        artifacts_dir: Path,
     ) -> subprocess.CompletedProcess:
         if not self.harness_cmd:
             raise RuntimeError("harness_cmd not set; cannot run official harness")
@@ -51,8 +54,8 @@ class SWEbenchEvaluator:
             raise RuntimeError(f"eval_root does not exist: {self.root}")
         if not self.workdir.exists():
             self.workdir.mkdir(parents=True, exist_ok=True)
-        report_dir_abs = self.report_dir if self.report_dir.is_absolute() else (self.workdir / self.report_dir)
-        report_dir_abs.mkdir(parents=True, exist_ok=True)
+        run_root = artifacts_dir / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
 
         abs_predictions = predictions_path.resolve()
         abs_predictions = self._ensure_model_key(abs_predictions)
@@ -62,18 +65,24 @@ class SWEbenchEvaluator:
             f"-s {split} "
             f"-p {abs_predictions} "
             f"-id {run_id} "
-            f"--report_dir {report_dir_abs.resolve()}"
+            f"--report_dir {run_root.resolve()}"
         )
         proc = subprocess.run(cmd, shell=True, cwd=self.workdir, capture_output=True, text=True)
         self.last_summary_report = self._relocate_summary_report(
             stdout=proc.stdout,
             run_id=run_id,
-            report_dir_abs=report_dir_abs,
+            run_root=run_root,
         )
+        self.last_harness_log_root = self._relocate_harness_logs(run_id=run_id, run_root=run_root)
         if self.last_summary_report:
             proc.stdout = (
                 f"{proc.stdout.rstrip()}\n"
                 f"Report relocated to {self.last_summary_report}\n"
+            )
+        if self.last_harness_log_root:
+            proc.stdout = (
+                f"{proc.stdout.rstrip()}\n"
+                f"Harness logs relocated to {self.last_harness_log_root}\n"
             )
         return proc
 
@@ -98,13 +107,13 @@ class SWEbenchEvaluator:
         self,
         stdout: str,
         run_id: str,
-        report_dir_abs: Path,
+        run_root: Path,
     ) -> "Path | None":
-        source = self._resolve_summary_report(stdout=stdout, run_id=run_id)
+        source = self._resolve_summary_report(stdout=stdout, run_id=run_id, run_root=run_root)
         if not source or not source.exists():
             return None
 
-        destination = report_dir_abs / source.name
+        destination = run_root / "report.json"
         source_resolved = source.resolve(strict=False)
         destination_resolved = destination.resolve(strict=False)
         if source_resolved == destination_resolved:
@@ -116,7 +125,7 @@ class SWEbenchEvaluator:
         source.replace(destination)
         return destination.resolve(strict=False)
 
-    def _resolve_summary_report(self, stdout: str, run_id: str) -> "Path | None":
+    def _resolve_summary_report(self, stdout: str, run_id: str, run_root: Path) -> "Path | None":
         matches = re.findall(r"Report written to\s+([^\s]+\.json)", stdout or "")
         for raw_path in reversed(matches):
             candidate = Path(raw_path)
@@ -125,7 +134,47 @@ class SWEbenchEvaluator:
             if candidate.exists():
                 return candidate
 
+        canonical = run_root / "report.json"
+        if canonical.exists():
+            return canonical
+
+        in_run_root = sorted(run_root.glob(f"*.{run_id}.json"))
+        if in_run_root:
+            return in_run_root[-1]
+
         fallback_matches = sorted(self.workdir.glob(f"*.{run_id}.json"))
-        if len(fallback_matches) == 1:
-            return fallback_matches[0]
+        if fallback_matches:
+            return fallback_matches[-1]
         return None
+
+    def _relocate_harness_logs(self, run_id: str, run_root: Path) -> "Path | None":
+        source = self.workdir / "logs" / "run_evaluation" / run_id
+        destination = run_root / "evaluation"
+
+        if not source.exists():
+            if destination.exists():
+                return destination.resolve(strict=False)
+            return None
+
+        if destination.exists():
+            shutil.rmtree(destination)
+        destination.mkdir(parents=True, exist_ok=True)
+
+        for model_dir in sorted(source.iterdir()):
+            if not model_dir.is_dir():
+                continue
+            model_name = model_dir.name
+            for instance_dir in sorted(model_dir.iterdir()):
+                if not instance_dir.is_dir():
+                    continue
+                target = destination / instance_dir.name
+                if target.exists():
+                    target = destination / f"{instance_dir.name}__{model_name}"
+                    suffix = 2
+                    while target.exists():
+                        target = destination / f"{instance_dir.name}__{model_name}_{suffix}"
+                        suffix += 1
+                shutil.move(str(instance_dir), str(target))
+
+        shutil.rmtree(source, ignore_errors=True)
+        return destination.resolve(strict=False)

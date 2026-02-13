@@ -16,6 +16,7 @@ portable_agent_runner.egg-info/requires.txt
 portable_agent_runner.egg-info/top_level.txt
 runtime/__init__.py
 runtime/agent_runtime.py
+runtime/artifact_policy.py
 runtime/model_backend.py
 runtime/schemas.py
 runtime/tools.py
@@ -23,6 +24,10 @@ scripts/__init__.py
 scripts/cli.py
 skills/__init__.py
 skills/loader.py
+tests/test_agent_prompts_contract.py
+tests/test_artifact_policy.py
+tests/test_cli_artifact_enforcement.py
 tests/test_skills_loader.py
 tests/test_spec_loader.py
+tests/test_swebench_evaluator_report_path.py
 tests/test_tool_extractor.py

@@ -10,7 +10,7 @@ evaluation:
   harness_cmd: python -m swebench.harness.run_evaluation
   eval_root: ./external/SWE-bench
   workdir: .
-  report_dir: logs/reports
+  report_dir: reports
 
 runtime:
   mode: patch_only
@@ -19,5 +19,4 @@ runtime:
   max_wall_time_s: 600
 
 output:
-  runs_dir: runs
-  logs_dir: logs
+  artifacts_dir: artifacts

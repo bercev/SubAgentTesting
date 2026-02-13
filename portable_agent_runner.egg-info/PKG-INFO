@@ -17,131 +17,189 @@ Requires-Dist: ijson>=3.2.3
 
 # Portable Agent Runner
 
-Python + uv-based agent runtime supporting model backends and benchmark adapters. First target: Qwen2.5-Coder-0.5B via OpenRouter and SWE-bench Verified.
+End-to-end pipeline for benchmarking code-editing agents on SWE-bench: it bootstraps the environment, composes an agent profile with a run config, runs the agent to generate patches, and evaluates them with the SWE-bench harness while saving outputs in a portable layout.
 
-## Setup
+- Agent behavior comes from `agents/*.yaml` (model/backend, prompts, skills).
+- Execution policy and dataset wiring come from `configs/runs/*.yaml`.
+- `agent run` produces prediction JSONL files; `agent eval` scores them and stores run artifacts under `artifacts/<run_id>/`.
 
+## Quick Start
+
+### 1) Bootstrap everything with one command
+
+```bash
+./scripts/bootstrap.sh
 ```
-pip install -e .
-cp .env.example .env  # fill OPENROUTER_API_KEY
-cp config.example.yaml config.yaml
+
+This command:
+- creates `.venv` with `uv`
+- installs this project in editable mode
+- clones SWE-bench into `external/SWE-bench` if missing
+- installs SWE-bench into the same `.venv`
+
+### 2) Configure secrets
+
+Create `.env` and set your API key:
+
+```bash
+cp .env.example .env
+```
+
+Set:
+
+```bash
+OPENROUTER_API_KEY=your_key_here
+```
+
+### 3) Choose run config + agent profile
+
+- Run configs: `configs/runs/*.yaml`
+- Agent profiles: `agents/*.yaml`
+
+Default run config:
+- `configs/runs/default.yaml`
+
+## Config Model
+
+### Agent profile (`agents/*.yaml`)
+Defines model behavior:
+- backend type + model id
+- prompt template
+- skills and tool policy
+- decoding defaults
+
+### Run config (`configs/runs/*.yaml`)
+Defines operational environment:
+- benchmark source and split
+- evaluation command and paths
+- runtime budgets
+- output directories
+
+### How they work together
+
+`agent run` composes both files for each run:
+- `agents/*.yaml` controls the model/backend and agent behavior.
+- `configs/runs/*.yaml` controls what benchmark to run, how to evaluate, and where to write outputs.
+- CLI flags (like `--mode`, `--split`, `--selector`, `--benchmark`) override values from run config for that invocation.
+
+Practical mental model:
+- `agents/*.yaml` = "how the assistant thinks and responds"
+- `configs/runs/*.yaml` = "what task environment and runtime policy to execute"
+
+Example (`configs/runs/example.swebench_verified.hf.yaml`):
+
+```yaml
+benchmark:
+  name: swebench_verified
+  dataset_name: SWE-bench/SWE-bench_Verified
+  split: test
+  data_source: hf
+  data_root:
+
+evaluation:
+  enabled: true
+  harness_cmd: python -m swebench.harness.run_evaluation
+  eval_root: ./external/SWE-bench
+  workdir: .
+  report_dir: reports
+
+runtime:
+  mode: patch_only
+  selector: 10
+  max_tool_calls: 20
+  max_wall_time_s: 600
+
+output:
+  artifacts_dir: artifacts
 ```
 
 ## Commands
 
-- `agent list` — list agents/benchmarks
-- `agent run --mode A` — patch-only smoke (no tools)
-- `agent run --mode B` — tools-enabled run
-- `agent predict` — batch Mode A to predictions.jsonl
-- `agent eval runs/.../predictions.jsonl` — run official harness (config.yaml)
+List available assets:
 
-## Config
-
-`config.yaml` controls data source and evaluation paths:
-
-```yaml
-data_source: hf
-data_root: /path/to/jsonl
-eval_root: /path/to/SWE-bench-repo
-harness_cmd: "python -m swebench.harness.run"
-default_split: test
-runs_dir: runs
+```bash
+agent list
 ```
 
-## End-to-End Pipeline
+Generate predictions (`patch_only`):
 
-This repo produces predictions for SWE-bench (or other benchmarks) and optionally evaluates them with the official harness.
-
-### 1) Install dependencies
-
-```
-pip install -e .
-```
-
-### 2) Configure API keys
-
-Create `.env` and set your OpenRouter key:
-
-```
-OPENROUTER_API_KEY=your_key_here
+```bash
+agent run \
+  --agent agents/openrouter_free.yaml \
+  --run-config configs/runs/default.yaml \
+  --mode patch_only \
+  --selector 10 \
+  --split test
 ```
 
-### 3) Configure dataset + evaluation
+Generate predictions (`tools_enabled`):
 
-Copy and edit `config.yaml`:
-
-```
-cp config.example.yaml config.yaml
-```
-
-Pick one data source:
-
-- HF (no local download needed):
-  ```yaml
-  data_source: hf
-  ```
-- Local JSONL:
-  ```yaml
-  data_source: local
-  data_root: /path/to/jsonl
-  ```
-
-If you want to evaluate with the harness, set:
-
-```yaml
-eval_root: /path/to/SWE-bench-repo
-harness_cmd: "python -m swebench.harness.run"
+```bash
+agent run \
+  --agent agents/openrouter_free.yaml \
+  --run-config configs/runs/default.yaml \
+  --mode tools_enabled \
+  --selector 10 \
+  --split test
 ```
 
-### 4) Choose an agent/model
+Evaluate predictions:
 
-Agent specs live under `agents/`. Examples:
-
-- `agents/openrouter_free.yaml` (OpenRouter free router)
-- `agents/qwen3_next_80b_free.yaml`
-- `agents/qwen2_5_coder.yaml`
-
-### 5) Run predictions (Mode A or B)
-
-Patch-only (no tools, safest across models):
-
-```
-agent run --agent agents/openrouter_free.yaml --mode A --selector 10 --split test
+```bash
+agent eval \
+  artifacts/<run_id>/predictions/<model>/<split>/<mode>/predictions.jsonl \
+  --run-config configs/runs/default.yaml
 ```
 
-Tools-enabled (requires provider tool support and local repos for workspace tools):
-
-```
-agent run --agent agents/openrouter_free.yaml --mode B --selector 10 --split test
-```
+## Outputs
 
 Predictions are written to:
 
-```
-runs/<model>/<split>/<mode>/<YYYY-MM-DD_HHMM>_predictions.jsonl
-```
-
-### 6) Evaluate (optional)
-
-If `eval_root` and `harness_cmd` are set:
-
-```
-agent eval runs/<model>/<split>/<mode>/<YYYY-MM-DD_HHMM>_predictions.jsonl
+```text
+artifacts/<run_id>/predictions/<model>/<split>/<mode>/predictions.jsonl
 ```
 
-### 7) Compare runs
+Harness logs are relocated to:
 
-Run Mode A and Mode B separately and compare harness results:
-
-```
-agent run --agent agents/openrouter_free.yaml --mode A --selector 10 --split test
-agent run --agent agents/openrouter_free.yaml --mode B --selector 10 --split test
+```text
+artifacts/<run_id>/evaluation/harness/<model>/<instance_id>/
 ```
 
-Then evaluate each predictions file.
+Harness reports are written to:
+
+```text
+artifacts/<run_id>/reports/
+```
+
+Each run also writes:
+
+```text
+artifacts/<run_id>/manifest.json
+```
+
+`agent run` / `agent eval` are quiet by default. Use `--verbose` to print per-task validation details and full harness output.
+
+## Portability
+
+Swap providers/models/datasets without code changes:
+1. pick an agent profile in `agents/`
+2. pick a run config in `configs/runs/`
+3. run `agent run` with optional CLI overrides
+
+## Presets
+
+- `configs/runs/default.yaml`
+- `configs/runs/example.swebench_verified.hf.yaml`
+- `configs/runs/openrouter_free_swebench.yaml`
+- `configs/runs/local_jsonl_swebench.yaml`
+- `configs/runs/qwen3_coder_free_swebench.yaml`
+
+Agent presets include:
+- `agents/openrouter_free.yaml`
+- `agents/qwen3_coder_free.yaml`
 
 ## Tests
 
-```
+```bash
 pytest
 ```

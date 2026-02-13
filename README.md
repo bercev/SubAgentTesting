@@ -4,7 +4,7 @@ End-to-end pipeline for benchmarking code-editing agents on SWE-bench: it bootst
 
 - Agent behavior comes from `agents/*.yaml` (model/backend, prompts, skills).
 - Execution policy and dataset wiring come from `configs/runs/*.yaml`.
-- `agent run` produces prediction JSONL files; `agent eval` scores them and stores logs/reports.
+- `agent run` produces prediction JSONL files; `agent eval` scores them and stores run artifacts under `artifacts/<run_id>/`.
 
 ## Quick Start
 
@@ -84,7 +84,7 @@ evaluation:
   harness_cmd: python -m swebench.harness.run_evaluation
   eval_root: ./external/SWE-bench
   workdir: .
-  report_dir: logs/reports
+  report_dir: reports
 
 runtime:
   mode: patch_only
@@ -93,8 +93,7 @@ runtime:
   max_wall_time_s: 600
 
 output:
-  runs_dir: runs
-  logs_dir: logs
+  artifacts_dir: artifacts
 ```
 
 ## Commands
@@ -131,7 +130,7 @@ Evaluate predictions:
 
 ```bash
 agent eval \
-  runs/<model>/<split>/<mode>/<timestamp>_predictions.jsonl \
+  artifacts/<run_id>/predictions.jsonl \
   --run-config configs/runs/default.yaml
 ```
 
@@ -140,19 +139,46 @@ agent eval \
 Predictions are written to:
 
 ```text
-runs/<model>/<split>/<mode>/<YYYY-MM-DD_HHMM>_predictions.jsonl
+artifacts/<run_id>/predictions.jsonl
 ```
 
-Harness logs are written to this repo root (not `external/SWE-bench`):
+Run logs are written to:
 
 ```text
-logs/run_evaluation/<run_id>/<model>/<instance_id>/
+artifacts/<run_id>/run.log
 ```
 
-Harness reports are written to:
+Harness logs are relocated to:
 
 ```text
-logs/reports/
+artifacts/<run_id>/evaluation/<instance_id>/
+```
+
+Harness report is written to:
+
+```text
+artifacts/<run_id>/report.json
+```
+
+Each run also writes:
+
+```text
+artifacts/<run_id>/manifest.json
+```
+
+`agent run` / `agent eval` are quiet by default. Use `--verbose` to print per-task validation details and full harness output.
+
+## Accuracy Summary
+
+During `agent eval`, the CLI prints a concise summary line with:
+- `resolved/submitted` accuracy (primary)
+- resolved/completed and completion(submitted) rates
+- unresolved/error/empty patch counts
+
+The same metrics are persisted under:
+
+```text
+artifacts/<run_id>/manifest.json -> evaluation.metrics
 ```
 
 ## Portability

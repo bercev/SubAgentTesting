@@ -1,6 +1,8 @@
 import json
 import os
+import random
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
@@ -34,17 +36,32 @@ class ModelBackend:
 class OpenRouterBackend(ModelBackend):
     """OpenAI-compatible backend targeting OpenRouter endpoints."""
 
+    _RETRYABLE_400_MARKERS = (
+        "developer instruction is not enabled",
+        "provider returned error",
+        "no providers available",
+        "temporarily unavailable",
+        "upstream error",
+        "try again",
+    )
+
     def __init__(
         self,
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         base_url: str = "https://openrouter.ai/api/v1",
         tool_call_extractor=None,
+        max_retries: int = 8,
+        initial_backoff_s: float = 1.0,
+        max_backoff_s: float = 10.0,
     ) -> None:
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         self.model = model or os.getenv("OPENROUTER_MODEL", "qwen2.5-coder-0.5b-instruct")
         self.base_url = base_url.rstrip("/")
         self.tool_call_extractor = tool_call_extractor or self._extract_tool_calls_from_text
+        self.max_retries = max(0, int(max_retries))
+        self.initial_backoff_s = max(0.0, float(initial_backoff_s))
+        self.max_backoff_s = max(0.0, float(max_backoff_s))
         if not self.api_key:
             raise ValueError("OPENROUTER_API_KEY is required")
         # OpenRouter expects provider-prefixed model ids (e.g., qwen/qwen2.5-coder-0.5b-instruct).
@@ -71,15 +88,52 @@ class OpenRouterBackend(ModelBackend):
         }
 
         with httpx.Client(timeout=httpx.Timeout(60.0)) as client:
-            response = client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
-            if response.status_code >= 400:
-                detail = response.text[:2000]
-                raise httpx.HTTPStatusError(
-                    f"OpenRouter error {response.status_code}: {detail}",
-                    request=response.request,
-                    response=response,
-                )
-            data = response.json()
+            data: Optional[Dict[str, Any]] = None
+            for attempt in range(self.max_retries + 1):
+                try:
+                    response = client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
+                except httpx.RequestError:
+                    if attempt >= self.max_retries:
+                        raise
+                    self._sleep_before_retry(attempt)
+                    continue
+
+                if response.status_code >= 400:
+                    detail = response.text[:2000]
+                    retryable = self._is_retryable_status(response.status_code, detail)
+                    if retryable and attempt < self.max_retries:
+                        self._sleep_before_retry(attempt)
+                        continue
+
+                    if retryable:
+                        message = (
+                            f"OpenRouter error after {attempt + 1} attempts "
+                            f"({response.status_code}): {detail}"
+                        )
+                    else:
+                        message = f"OpenRouter error {response.status_code}: {detail}"
+                    raise httpx.HTTPStatusError(
+                        message,
+                        request=response.request,
+                        response=response,
+                    )
+
+                try:
+                    parsed = response.json()
+                except json.JSONDecodeError:
+                    if attempt >= self.max_retries:
+                        raise
+                    self._sleep_before_retry(attempt)
+                    continue
+                if isinstance(parsed, dict):
+                    data = parsed
+                    break
+                if attempt >= self.max_retries:
+                    raise ValueError("OpenRouter returned non-dict JSON response")
+                self._sleep_before_retry(attempt)
+
+            if data is None:
+                raise RuntimeError("OpenRouter request exhausted retries without a valid response")
 
         choice = data.get("choices", [{}])[0]
         message = choice.get("message", {})
@@ -104,6 +158,24 @@ class OpenRouterBackend(ModelBackend):
             tool_calls = self.tool_call_extractor(assistant_text)
 
         return GenerationResult(assistant_text=assistant_text, tool_calls=tool_calls)
+
+    @classmethod
+    def _is_retryable_status(cls, status_code: int, detail: str) -> bool:
+        if status_code in {408, 409, 425, 429} or status_code >= 500:
+            return True
+        if status_code != 400:
+            return False
+        lowered = detail.lower()
+        return any(marker in lowered for marker in cls._RETRYABLE_400_MARKERS)
+
+    def _sleep_before_retry(self, attempt: int) -> None:
+        base = self.initial_backoff_s * (2**attempt)
+        wait_s = min(self.max_backoff_s, base)
+        if wait_s <= 0:
+            return
+        jitter_max = min(1.0, wait_s * 0.25)
+        wait_s += random.uniform(0.0, jitter_max)
+        time.sleep(wait_s)
 
     @staticmethod
     def _extract_tool_calls_from_text(text: str) -> List[ToolCall]:

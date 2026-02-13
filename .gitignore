@@ -63,4 +63,4 @@ __pycache__/
 summaries/
 
 # runs (to reduce commit size)
-runs/
+artifacts/
