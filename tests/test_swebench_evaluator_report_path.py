@@ -2,6 +2,8 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from benchmarks.swebench_verified.evaluator import SWEbenchEvaluator
 from runtime.config_loader import normalize_run_config
 
@@ -16,11 +18,9 @@ def _run_config(artifacts_dir: Path, eval_root: Path, workdir: Path):
                 "data_source": "hf",
             },
             "evaluation": {
-                "enabled": True,
                 "harness_cmd": "python -m swebench.harness.run_evaluation",
                 "eval_root": str(eval_root),
                 "workdir": str(workdir),
-                "report_dir": "reports",
             },
             "runtime": {
                 "mode": "patch_only",
@@ -105,7 +105,19 @@ def test_run_harness_relocates_with_instance_collision(monkeypatch, tmp_path: Pa
     artifacts_dir.mkdir(parents=True)
 
     predictions_path = tmp_path / "predictions.jsonl"
-    predictions_path.write_text("{}", encoding="utf-8")
+    predictions_path.write_text(
+        json.dumps(
+            {
+                "instance_id": "astropy__astropy-12907",
+                "model_patch": "",
+                "model_name_or_path": "qwen/qwen3-coder:free",
+                "model_name": "qwen3-coder-free",
+                "repo": "astropy/astropy",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     cfg = _run_config(artifacts_dir=artifacts_dir, eval_root=eval_root, workdir=workdir)
     evaluator = SWEbenchEvaluator()
@@ -135,3 +147,34 @@ def test_run_harness_relocates_with_instance_collision(monkeypatch, tmp_path: Pa
     dest_root = artifacts_dir / run_id / "evaluation"
     assert (dest_root / "same-instance").exists()
     assert (dest_root / "same-instance__model-b").exists()
+
+
+def test_run_harness_fails_when_model_name_or_path_missing(tmp_path: Path):
+    workdir = tmp_path / "work"
+    workdir.mkdir(parents=True)
+    eval_root = tmp_path / "external" / "SWE-bench"
+    eval_root.mkdir(parents=True)
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    predictions_path = tmp_path / "predictions.jsonl"
+    predictions_path.write_text(
+        json.dumps(
+            {
+                "instance_id": "astropy__astropy-12907",
+                "model_patch": "",
+                "model_name": "openrouter-free",
+                "repo": "astropy/astropy",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = _run_config(artifacts_dir=artifacts_dir, eval_root=eval_root, workdir=workdir)
+    evaluator = SWEbenchEvaluator()
+    with pytest.raises(ValueError, match="model_name_or_path"):
+        evaluator.run_harness(
+            predictions_path=predictions_path,
+            run_id="2026-02-13_010203",
+            config=cfg,
+        )

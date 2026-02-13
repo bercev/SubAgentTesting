@@ -8,6 +8,8 @@ from runtime.tools import ToolRegistry
 
 
 class AgentRuntime:
+    """Task execution loop that drives model generation and tool calls."""
+
     def __init__(
         self,
         backend: ModelBackend,
@@ -17,6 +19,8 @@ class AgentRuntime:
         max_wall_time_s: int = 600,
         max_completion_tokens: int = 512,
     ) -> None:
+        """Capture runtime dependencies and loop limits for one execution strategy."""
+
         self.backend = backend
         self.tool_registry = tool_registry
         self.allowed_tools = allowed_tools
@@ -31,6 +35,8 @@ class AgentRuntime:
         tool_schemas: Optional[List[Dict[str, Any]]],
         decoding_defaults: Optional[Dict[str, Any]] = None,
     ) -> AgentResult:
+        """Run model/tool loop until submission, timeout, or budget exhaustion."""
+
         start = time.monotonic()
         messages: List[Dict[str, Any]] = [
             {"role": "system", "content": prompt},
@@ -41,6 +47,7 @@ class AgentRuntime:
         tool_calls_made = 0
 
         while True:
+            # Enforce wall-clock and tool-call budgets before each model turn.
             if time.monotonic() - start > self.max_wall_time_s:
                 break
             if tool_calls_made >= self.max_tool_calls:
@@ -69,7 +76,7 @@ class AgentRuntime:
             messages.append(assistant_msg)
 
             if not result.tool_calls:
-                # If no tool calls, treat the assistant text as the final artifact.
+                # Patch-only mode often terminates by returning final artifact text directly.
                 final_artifact = result.assistant_text
                 terminated = True
                 break
@@ -98,6 +105,7 @@ class AgentRuntime:
                 )
 
                 if tc.name == "submit" and tool_result.get("submitted"):
+                    # `submit` is the canonical explicit termination signal.
                     final_artifact = tc.arguments.get("final_artifact", "")
                     terminated = True
                     break
@@ -106,7 +114,7 @@ class AgentRuntime:
                 break
 
         if not terminated:
-            # forced termination
+            # Preserve last artifact state even when loop exits on limits.
             final_artifact = final_artifact or ""
 
         metadata = {"terminated": terminated}

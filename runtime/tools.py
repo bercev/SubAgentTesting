@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional
 
 @dataclass
 class ToolContext:
+    """Execution context shared by all tool handlers."""
+
     workspace_root: Path
     submit_callback: Optional[callable] = None
     bash_timeout_s: int = 60
@@ -16,7 +18,11 @@ class ToolContext:
 
 
 class ToolRegistry:
+    """Collection of workspace and submission tools callable by the agent."""
+
     def __init__(self, ctx: ToolContext) -> None:
+        """Register available tool handlers for the current task context."""
+
         self.ctx = ctx
         self._tools = {
             "workspace_list": self.workspace_list,
@@ -30,6 +36,8 @@ class ToolRegistry:
 
     @property
     def schemas(self) -> List[Dict[str, Any]]:
+        """Return OpenAI-compatible function tool schemas."""
+
         return [
             {
                 "type": "function",
@@ -133,6 +141,8 @@ class ToolRegistry:
         ]
 
     def execute(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        """Dispatch one tool call by name with dict arguments."""
+
         if name not in self._tools:
             return {"error": f"unknown tool {name}"}
         return self._tools[name](**arguments)
@@ -140,6 +150,8 @@ class ToolRegistry:
     # Tool implementations
 
     def workspace_list(self, path: str) -> Dict[str, Any]:
+        """List files/directories under a workspace-relative path."""
+
         root = self.ctx.workspace_root
         target = (root / path).resolve()
         if root not in target.parents and target != root:
@@ -155,6 +167,8 @@ class ToolRegistry:
         return {"entries": entries}
 
     def workspace_open(self, path: str, start_line: int = 1, end_line: Optional[int] = None) -> Dict[str, Any]:
+        """Read a line range from a workspace file with escape checks."""
+
         root = self.ctx.workspace_root
         target = (root / path).resolve()
         if root not in target.parents and target != root:
@@ -169,6 +183,8 @@ class ToolRegistry:
         return {"content": snippet, "start_line": start, "end_line": end}
 
     def workspace_search(self, query: str, glob: str = "**/*") -> Dict[str, Any]:
+        """Regex-search files under workspace and return capped matches."""
+
         root = self.ctx.workspace_root
         pattern = re.compile(query)
         matches = []
@@ -186,6 +202,8 @@ class ToolRegistry:
         return {"matches": matches}
 
     def workspace_apply_patch(self, unified_diff: str) -> Dict[str, Any]:
+        """Run `patch` in workspace root and return success + truncated output."""
+
         root = self.ctx.workspace_root
         with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
             tmp.write(unified_diff)
@@ -205,6 +223,8 @@ class ToolRegistry:
             os.unlink(tmp_path)
 
     def workspace_write(self, path: str, content: str) -> Dict[str, Any]:
+        """Overwrite a workspace file after path safety checks."""
+
         root = self.ctx.workspace_root
         target = (root / path).resolve()
         if root not in target.parents and target != root:
@@ -214,6 +234,8 @@ class ToolRegistry:
         return {"written": str(target.relative_to(root))}
 
     def bash(self, cmd: str, timeout_s: Optional[int] = None) -> Dict[str, Any]:
+        """Execute one shell command in workspace with timeout and truncation."""
+
         root = self.ctx.workspace_root
         timeout = timeout_s or self.ctx.bash_timeout_s
         proc = subprocess.run(
@@ -228,6 +250,8 @@ class ToolRegistry:
         return {"returncode": proc.returncode, "output": output}
 
     def submit(self, final_artifact: str) -> Dict[str, Any]:
+        """Signal task completion and forward final artifact to runtime callback."""
+
         if self.ctx.submit_callback:
             self.ctx.submit_callback(final_artifact)
         return {"submitted": True, "artifact_preview": final_artifact[:2000]}

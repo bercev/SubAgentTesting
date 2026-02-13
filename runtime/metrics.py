@@ -17,6 +17,8 @@ EVAL_COUNT_KEYS = (
 
 
 def _to_int(value: Any) -> int:
+    """Convert metric-like values to non-negative integers."""
+
     if isinstance(value, bool):
         return int(value)
     if isinstance(value, int):
@@ -32,12 +34,16 @@ def _to_int(value: Any) -> int:
 
 
 def _safe_div(numerator: int, denominator: int) -> float:
+    """Return zero-safe division result for derived rate metrics."""
+
     if denominator <= 0:
         return 0.0
     return float(numerator) / float(denominator)
 
 
 def zero_eval_metrics() -> Dict[str, Any]:
+    """Return zeroed metrics payload used when report parsing fails."""
+
     return {
         "total_instances": 0,
         "submitted_instances": 0,
@@ -53,6 +59,8 @@ def zero_eval_metrics() -> Dict[str, Any]:
 
 
 def read_eval_metrics(report_path: Optional[Path]) -> Tuple[Dict[str, Any], Optional[str]]:
+    """Parse harness report JSON and compute derived accuracy/completion rates."""
+
     metrics = zero_eval_metrics()
     if report_path is None or not report_path.exists():
         return metrics, "report_not_found"
@@ -78,8 +86,9 @@ def read_eval_metrics(report_path: Optional[Path]) -> Tuple[Dict[str, Any], Opti
 
 
 def fmt_pct(value: Any) -> str:
+    """Format ratios as percentage strings for CLI summaries."""
+
     try:
         return f"{float(value) * 100:.2f}%"
     except Exception:
         return "0.00%"
-

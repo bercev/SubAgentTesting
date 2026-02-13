@@ -14,13 +14,14 @@ from runtime.eval_service import EvalOutcome
 
 class _FakeAdapter:
     benchmark_name = "swebench_verified"
+    _evaluator = None
 
     def __init__(self, evaluator):
         self._evaluator = evaluator
 
     @classmethod
     def from_config(cls, config):
-        return cls(evaluator=config.benchmark.params["evaluator"])
+        return cls(evaluator=cls._evaluator)
 
     def get_evaluator(self, config):
         return self._evaluator
@@ -70,6 +71,7 @@ class _FakeEvaluator:
 
 
 def _run_config(artifacts_dir: Path, evaluator: _FakeEvaluator) -> Any:
+    _FakeAdapter._evaluator = evaluator
     return normalize_run_config(
         {
             "benchmark": {
@@ -78,14 +80,12 @@ def _run_config(artifacts_dir: Path, evaluator: _FakeEvaluator) -> Any:
                 "split": "test",
                 "data_source": "hf",
                 "data_root": None,
-                "params": {"evaluator": evaluator},
+                "params": {},
             },
             "evaluation": {
-                "enabled": True,
                 "harness_cmd": "python -m swebench.harness.run_evaluation",
                 "eval_root": "./external/SWE-bench",
                 "workdir": ".",
-                "report_dir": "reports",
             },
             "runtime": {
                 "mode": "patch_only",

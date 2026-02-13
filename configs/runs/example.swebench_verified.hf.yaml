@@ -10,11 +10,9 @@ benchmark:
     {}
 
 evaluation:
-  enabled: true
   harness_cmd: python -m swebench.harness.run_evaluation
   eval_root: ./external/SWE-bench
   workdir: .
-  report_dir: reports
   params:
     # Optional evaluator-specific passthrough values.
     # Example: timeout_s: 900

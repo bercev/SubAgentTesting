@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Literal, Optional
 
 import yaml
 
@@ -10,6 +10,8 @@ from runtime.config_models import RunConfig
 
 
 def default_run_config_dict() -> Dict[str, Any]:
+    """Return the canonical nested defaults for all run config sections."""
+
     return {
         "benchmark": {
             "name": "swebench_verified",
@@ -20,11 +22,9 @@ def default_run_config_dict() -> Dict[str, Any]:
             "params": {},
         },
         "evaluation": {
-            "enabled": True,
             "harness_cmd": "python -m swebench.harness.run_evaluation",
             "eval_root": "./external/SWE-bench",
             "workdir": ".",
-            "report_dir": "reports",
             "params": {},
         },
         "runtime": {
@@ -40,6 +40,8 @@ def default_run_config_dict() -> Dict[str, Any]:
 
 
 def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge nested config values while preserving default sections."""
+
     merged = deepcopy(base)
     for key, value in override.items():
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
@@ -49,69 +51,44 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
     return merged
 
 
-def normalize_mode(mode_value: str) -> str:
-    aliases = {
-        "A": "patch_only",
-        "PATCH_ONLY": "patch_only",
-        "PATCH-ONLY": "patch_only",
-        "SUBMIT_ONLY": "patch_only",
-        "B": "tools_enabled",
-        "TOOLS_ENABLED": "tools_enabled",
-        "TOOLS-ENABLED": "tools_enabled",
-        "TOOLS": "tools_enabled",
-    }
-    normalized = aliases.get(str(mode_value).strip().upper())
-    if normalized:
-        return normalized
+def _validate_mode(mode_value: str) -> Literal["patch_only", "tools_enabled"]:
+    """Enforce strict mode values with no legacy alias conversions."""
+
+    if mode_value in {"patch_only", "tools_enabled"}:
+        return mode_value
     raise ValueError(
-        f"Unsupported mode '{mode_value}'. Use one of: patch_only, tools_enabled (legacy: A, B)."
+        f"Unsupported mode '{mode_value}'. Use one of: patch_only, tools_enabled."
     )
 
 
 def normalize_run_config_dict(raw_config: Dict[str, Any]) -> Dict[str, Any]:
-    defaults = default_run_config_dict()
-    nested_keys = ("benchmark", "evaluation", "runtime", "output")
-    if any(isinstance(raw_config.get(key), dict) for key in nested_keys):
-        return _deep_merge(defaults, raw_config)
+    """Validate nested config shape and merge with canonical defaults."""
 
-    # Legacy flat config compatibility
-    legacy_as_nested = {
-        "benchmark": {
-            "name": raw_config.get("benchmark"),
-            "dataset_name": raw_config.get("dataset_name"),
-            "split": raw_config.get("default_split") or raw_config.get("split"),
-            "data_source": raw_config.get("data_source"),
-            "data_root": raw_config.get("data_root"),
-            "params": raw_config.get("benchmark_params"),
-        },
-        "evaluation": {
-            "harness_cmd": raw_config.get("harness_cmd"),
-            "eval_root": raw_config.get("eval_root"),
-            "workdir": raw_config.get("workdir"),
-            "report_dir": raw_config.get("report_dir"),
-            "params": raw_config.get("evaluation_params"),
-        },
-        "runtime": {
-            "mode": raw_config.get("mode"),
-            "selector": raw_config.get("selector"),
-            "max_tool_calls": raw_config.get("max_tool_calls"),
-            "max_wall_time_s": raw_config.get("max_wall_time_s"),
-        },
-        "output": {
-            "artifacts_dir": raw_config.get("artifacts_dir"),
-        },
-    }
-    return _deep_merge(defaults, legacy_as_nested)
+    required_sections = ("benchmark", "evaluation", "runtime", "output")
+    for key in required_sections:
+        value = raw_config.get(key)
+        if not isinstance(value, dict):
+            raise ValueError(
+                "Run config must use strict nested sections "
+                f"{required_sections}; section '{key}' is missing or not an object."
+            )
+
+    defaults = default_run_config_dict()
+    return _deep_merge(defaults, raw_config)
 
 
 def normalize_run_config(raw_config: Dict[str, Any]) -> RunConfig:
+    """Parse and strictly validate runtime config values."""
+
     normalized_dict = normalize_run_config_dict(raw_config)
     config = RunConfig.model_validate(normalized_dict)
-    config.runtime.mode = normalize_mode(config.runtime.mode)
+    config.runtime.mode = _validate_mode(config.runtime.mode)
     return config
 
 
 def load_run_config(run_config_path: Path) -> RunConfig:
+    """Load and validate a run config YAML file from disk."""
+
     if not run_config_path.exists():
         raise FileNotFoundError(
             "Missing run config: "
@@ -132,6 +109,8 @@ def apply_run_overrides(
     selector: Optional[int] = None,
     mode: Optional[str] = None,
 ) -> RunConfig:
+    """Apply CLI overrides after strict config parsing."""
+
     effective = config.model_copy(deep=True)
     if benchmark:
         effective.benchmark.name = benchmark
@@ -140,5 +119,5 @@ def apply_run_overrides(
     if selector is not None:
         effective.runtime.selector = selector
     if mode:
-        effective.runtime.mode = normalize_mode(mode)
+        effective.runtime.mode = _validate_mode(mode)
     return effective

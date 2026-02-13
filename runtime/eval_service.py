@@ -19,6 +19,8 @@ RUN_ID_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}$")
 
 @dataclass
 class EvalOutcome:
+    """Structured result returned after one evaluation invocation."""
+
     run_id: str
     benchmark_name: str
     split_name: str
@@ -31,10 +33,14 @@ class EvalOutcome:
 
 
 def is_valid_run_id(value: str) -> bool:
+    """Validate canonical timestamp-based run id format."""
+
     return bool(RUN_ID_PATTERN.match(value))
 
 
 def derive_run_id_from_predictions(predictions_path: Path, artifacts_dir: Path) -> str:
+    """Derive run id strictly from canonical predictions path layout."""
+
     abs_predictions = predictions_path.resolve()
     abs_artifacts = artifacts_dir.resolve()
 
@@ -59,6 +65,8 @@ def derive_run_id_from_predictions(predictions_path: Path, artifacts_dir: Path) 
 
 
 def read_prediction_identity(predictions_path: Path) -> Tuple[Optional[str], Optional[str]]:
+    """Read model identity fields from first non-empty prediction row."""
+
     if not predictions_path.exists():
         return None, None
     try:
@@ -79,6 +87,8 @@ def read_prediction_identity(predictions_path: Path) -> Tuple[Optional[str], Opt
 
 
 def format_metrics_lines(metrics: Dict[str, Any]) -> Tuple[str, str]:
+    """Render compact summary lines for terminal evaluation output."""
+
     summary_line = (
         "Metrics: "
         f"resolved={metrics['resolved_instances']}/{metrics['submitted_instances']} "
@@ -102,6 +112,8 @@ def execute_eval(
     config: RunConfig,
     benchmark: Optional[str] = None,
 ) -> EvalOutcome:
+    """Run benchmark evaluator and persist evaluation status into manifest."""
+
     effective_config = apply_run_overrides(config, benchmark=benchmark)
     benchmark_name = effective_config.benchmark.name
 
@@ -177,4 +189,3 @@ def execute_eval(
         metrics=metrics,
         metrics_warning=metrics_warning,
     )
-

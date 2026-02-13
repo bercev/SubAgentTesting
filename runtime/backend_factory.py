@@ -6,6 +6,8 @@ from runtime.model_backend import ModelBackend, OpenRouterBackend
 
 
 def build_backend(backend_config: Mapping[str, Any]) -> ModelBackend:
+    """Construct backend implementation from agent backend config."""
+
     backend_type = backend_config.get("type", "openrouter")
     if backend_type == "openrouter":
         model_id = backend_config.get("model")
@@ -19,4 +21,3 @@ def build_backend(backend_config: Mapping[str, Any]) -> ModelBackend:
             max_backoff_s=backend_config.get("max_backoff_s", 10.0),
         )
     raise ValueError(f"Unsupported backend type: {backend_type}")
-

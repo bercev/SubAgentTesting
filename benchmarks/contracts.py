@@ -8,6 +8,8 @@ from runtime.schemas import BenchmarkTask
 
 
 class BenchmarkEvaluator(Protocol):
+    """Protocol for benchmark harness executors used by eval service."""
+
     last_summary_report: Optional[Path]
     last_harness_log_root: Optional[Path]
 
@@ -20,6 +22,8 @@ class BenchmarkEvaluator(Protocol):
 
 
 class BenchmarkAdapter(Protocol):
+    """Protocol for benchmark-specific task loading and prediction serialization."""
+
     benchmark_name: ClassVar[str]
 
     @classmethod
@@ -42,4 +46,3 @@ class BenchmarkAdapter(Protocol):
 
 
 from runtime.config_models import RunConfig
-

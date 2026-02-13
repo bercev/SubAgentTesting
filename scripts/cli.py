@@ -41,6 +41,8 @@ def run(
         help="Quiet by default; use --verbose to print per-task terminal output.",
     ),
 ):
+    """Generate predictions for selected benchmark tasks."""
+
     config = load_run_config(Path(run_config))
     outcome = execute_run(
         agent_path=agent,
@@ -83,6 +85,8 @@ def predict(
         help="Quiet by default; use --verbose to print per-task terminal output.",
     ),
 ):
+    """Convenience wrapper for `run` forced to patch-only mode."""
+
     run(
         agent=agent,
         benchmark=None,
@@ -105,6 +109,8 @@ def eval(
         help="Verbose by default; use --quiet to only show harness output on failure.",
     ),
 ):
+    """Evaluate a canonical predictions file with benchmark harness."""
+
     config = load_run_config(Path(run_config))
     predictions_path = Path(predictions)
 
@@ -152,4 +158,3 @@ def eval(
 
 if __name__ == "__main__":
     app()
-

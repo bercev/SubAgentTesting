@@ -7,6 +7,8 @@ from runtime.schemas import BenchmarkTask
 
 
 class SWEbenchVerifiedAdapter:
+    """SWE-bench task loader and prediction serializer."""
+
     benchmark_name = "swebench_verified"
 
     def __init__(
@@ -16,6 +18,8 @@ class SWEbenchVerifiedAdapter:
         dataset_name: str = "SWE-bench/SWE-bench_Verified",
         params: Optional[Dict[str, Any]] = None,
     ) -> None:
+        """Persist benchmark source configuration for later task loading."""
+
         self.data_source = data_source
         self.data_root = Path(data_root) if data_root else None
         self.dataset_name = dataset_name
@@ -23,6 +27,8 @@ class SWEbenchVerifiedAdapter:
 
     @classmethod
     def from_config(cls, config: RunConfig) -> "SWEbenchVerifiedAdapter":
+        """Build adapter state from normalized run config."""
+
         return cls(
             data_source=config.benchmark.data_source,
             data_root=config.benchmark.data_root,
@@ -30,11 +36,9 @@ class SWEbenchVerifiedAdapter:
             params=config.benchmark.params,
         )
 
-    def load_tasks(self, split: str = "dev", selector: Optional[int] = None) -> List[BenchmarkTask]:
-        """
-        Load tasks from a jsonl file at {root}/{split}.jsonl.
-        Each line should contain fields: instance_id, repo, prompt, patch? (ignored)
-        """
+    def load_tasks(self, split: str = "test", selector: Optional[int] = None) -> List[BenchmarkTask]:
+        """Load tasks from HF or local JSONL source with strict input requirements."""
+
         if self.data_source == "hf":
             return self._load_tasks_from_hf(split, selector)
 
@@ -42,64 +46,43 @@ class SWEbenchVerifiedAdapter:
             raise ValueError("data_root is required when data_source=local")
 
         path = self.data_root / f"{split}.jsonl"
-        tasks: List[BenchmarkTask] = []
         if not path.exists():
-            # Provide a dummy task for smoke tests
-            tasks.append(
-                BenchmarkTask(
-                    task_id="dummy-0",
-                    instruction="Fix the issue described in the prompt (dummy)",
-                    resources={"repo": "dummy"},
-                    expected_output_type="patch",
-                )
-            )
-            return tasks[: selector or 1]
+            raise ValueError(f"Missing dataset split file: {path}")
 
-        if path.suffix == ".json":
-            import ijson
-
-            with path.open("r", encoding="utf-8") as f:
-                for record in ijson.items(f, "item"):
-                    if not isinstance(record, dict):
-                        raise ValueError(
-                            f"Invalid record type in {path}: expected object, got {type(record).__name__}"
-                        )
-                    task = self._record_to_task(cast(Mapping[str, Any], record))
-                    tasks.append(task)
-                    if selector and len(tasks) >= selector:
-                        break
-        else:
-            with path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    record = json.loads(line)
-                    if not isinstance(record, dict):
-                        raise ValueError(
-                            f"Invalid record type in {path}: expected object, got {type(record).__name__}"
-                        )
-                    task = self._record_to_task(cast(Mapping[str, Any], record))
-                    tasks.append(task)
-                    if selector and len(tasks) >= selector:
-                        break
+        tasks: List[BenchmarkTask] = []
+        with path.open("r", encoding="utf-8") as f:
+            for line in f:
+                record = json.loads(line)
+                if not isinstance(record, dict):
+                    raise ValueError(
+                        f"Invalid record type in {path}: expected object, got {type(record).__name__}"
+                    )
+                task = self._record_to_task(cast(Mapping[str, Any], record))
+                tasks.append(task)
+                if selector and len(tasks) >= selector:
+                    break
         return tasks
 
     def _load_tasks_from_hf(self, split: str, selector: Optional[int]) -> List[BenchmarkTask]:
+        """Load a bounded set of tasks from Hugging Face dataset rows."""
+
         from datasets import load_dataset
 
-        # SWE-bench Verified on HF currently exposes only "test".
-        hf_split = "test" if split == "dev" else split
-        ds = load_dataset(self.dataset_name, split=hf_split)
+        ds = load_dataset(self.dataset_name, split=split)
         tasks: List[BenchmarkTask] = []
         count = selector or len(ds)
         for record in ds.select(range(min(count, len(ds)))):  # type: ignore[arg-type]
             if not isinstance(record, dict):
                 raise ValueError(
-                    f"Invalid record type in dataset split '{hf_split}': "
+                    f"Invalid record type in dataset split '{split}': "
                     f"expected object, got {type(record).__name__}"
                 )
             tasks.append(self._record_to_task(cast(Mapping[str, Any], record)))
         return tasks
 
     def _record_to_task(self, record: Mapping[str, Any]) -> BenchmarkTask:
+        """Convert one dataset row to a strict patch-generation benchmark task."""
+
         instance_id_raw = record.get("instance_id")
         if not isinstance(instance_id_raw, str) or not instance_id_raw.strip():
             raise ValueError(f"Invalid or missing instance_id: {instance_id_raw!r}")
@@ -127,6 +110,8 @@ class SWEbenchVerifiedAdapter:
         )
 
     def workspace_root_for_task(self, task: BenchmarkTask) -> Path:
+        """Resolve the workspace root used by tools for a given task."""
+
         if self.data_root:
             repo = task.resources.get("repo") if task.resources else None
             if isinstance(repo, str) and repo:
@@ -135,6 +120,8 @@ class SWEbenchVerifiedAdapter:
         return Path(".")
 
     def get_evaluator(self, config: RunConfig):
+        """Return the benchmark-specific evaluator implementation."""
+
         from benchmarks.swebench_verified.evaluator import SWEbenchEvaluator
 
         return SWEbenchEvaluator()
@@ -147,6 +134,8 @@ class SWEbenchVerifiedAdapter:
         model_name: str,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
+        """Serialize predictions into the SWE-bench JSONL schema."""
+
         repo = None
         if metadata and metadata.get("repo"):
             repo = metadata.get("repo")

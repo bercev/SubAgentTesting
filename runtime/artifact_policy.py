@@ -6,18 +6,24 @@ from typing import Callable, Dict
 
 @dataclass
 class ArtifactPolicyResult:
+    """Result of output normalization/validation for one artifact."""
+
     artifact: str
     valid: bool
     reason: str
 
 
 def apply_artifact_policy(raw_artifact: str, output_type: str) -> ArtifactPolicyResult:
+    """Dispatch artifact handling based on expected output type."""
+
     normalized_type = (output_type or "text").strip().lower()
     policy = _POLICIES.get(normalized_type, _normalize_text_artifact)
     return policy(raw_artifact or "")
 
 
 def _normalize_patch_artifact(raw_artifact: str) -> ArtifactPolicyResult:
+    """Extract and validate unified-diff patch output."""
+
     text = _normalize_newlines(raw_artifact).strip()
     if not text:
         return ArtifactPolicyResult(artifact="", valid=False, reason="empty_output")
@@ -44,11 +50,15 @@ def _normalize_patch_artifact(raw_artifact: str) -> ArtifactPolicyResult:
 
 
 def _normalize_text_artifact(raw_artifact: str) -> ArtifactPolicyResult:
+    """Normalize plain-text artifacts with newline and edge whitespace cleanup."""
+
     normalized = _normalize_newlines(raw_artifact).strip()
     return ArtifactPolicyResult(artifact=normalized, valid=True, reason="ok")
 
 
 def _normalize_json_artifact(raw_artifact: str) -> ArtifactPolicyResult:
+    """Validate and canonicalize JSON output into stable serialized form."""
+
     text = _normalize_newlines(raw_artifact).strip()
     if not text:
         return ArtifactPolicyResult(artifact="", valid=False, reason="empty_output")
@@ -61,6 +71,8 @@ def _normalize_json_artifact(raw_artifact: str) -> ArtifactPolicyResult:
 
 
 def _extract_diff_candidate(text: str) -> str:
+    """Find the first diff payload candidate in raw model output."""
+
     if text.startswith("diff --git "):
         return text
 
@@ -77,6 +89,8 @@ def _extract_diff_candidate(text: str) -> str:
 
 
 def _truncate_non_patch_tail(candidate: str) -> str:
+    """Stop patch output at first clear non-patch tail after hunk body starts."""
+
     allowed_prefixes = (
         "diff --git ",
         "index ",
@@ -124,6 +138,8 @@ def _truncate_non_patch_tail(candidate: str) -> str:
 
 
 def _normalize_newlines(text: str) -> str:
+    """Normalize CRLF/CR newlines to LF for deterministic downstream parsing."""
+
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 

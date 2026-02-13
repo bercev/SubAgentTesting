@@ -92,3 +92,52 @@ def test_non_retryable_400_fails_fast(monkeypatch):
         )
 
     assert calls["count"] == 1
+
+
+def test_backend_requires_model_when_env_missing(monkeypatch):
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    with pytest.raises(ValueError, match="backend.model or OPENROUTER_MODEL is required"):
+        OpenRouterBackend(api_key="test-key", model=None)
+
+
+def test_generate_does_not_extract_tool_calls_from_assistant_text(monkeypatch):
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse(
+                200,
+                "",
+                payload={
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '<tool_call name="submit">{"final_artifact":"patch"}</tool_call>',
+                            }
+                        }
+                    ]
+                },
+            )
+
+    monkeypatch.setattr("runtime.model_backend.httpx.Client", _FakeClient)
+    backend = OpenRouterBackend(
+        api_key="test-key",
+        model="openrouter/free",
+        max_retries=0,
+    )
+    result = backend.generate(
+        messages=[
+            {"role": "system", "content": "prompt"},
+            {"role": "user", "content": "task"},
+        ],
+        tools=[{"type": "function", "function": {"name": "submit", "parameters": {"type": "object"}}}],
+    )
+    assert result.assistant_text.startswith("<tool_call")
+    assert result.tool_calls == []

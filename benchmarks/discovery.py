@@ -7,6 +7,8 @@ from typing import Any, Dict, Type
 
 
 def _is_adapter_candidate(value: Any) -> bool:
+    """Check whether a class exposes the required benchmark adapter surface."""
+
     if not inspect.isclass(value):
         return False
     required_methods = (
@@ -22,6 +24,8 @@ def _is_adapter_candidate(value: Any) -> bool:
 
 
 def discover_benchmark_adapters() -> Dict[str, Type[Any]]:
+    """Import `benchmarks/*/adapter.py` modules and register adapter classes."""
+
     discovered: Dict[str, Type[Any]] = {}
     root = Path(__file__).resolve().parent
     for child in sorted(root.iterdir()):

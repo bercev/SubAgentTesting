@@ -1,5 +1,3 @@
-# Legacy compatibility example.
-# Preferred location for run configs is now: configs/runs/*.yaml
 benchmark:
   name: swebench_verified
   dataset_name: SWE-bench/SWE-bench_Verified
@@ -8,11 +6,10 @@ benchmark:
   data_root:
 
 evaluation:
-  enabled: true
   harness_cmd: python -m swebench.harness.run_evaluation
   eval_root: ./external/SWE-bench
   workdir: .
-  report_dir: logs/reports
+  params: {}
 
 runtime:
   mode: patch_only
@@ -21,5 +18,4 @@ runtime:
   max_wall_time_s: 600
 
 output:
-  runs_dir: runs
-  logs_dir: logs
+  artifacts_dir: artifacts

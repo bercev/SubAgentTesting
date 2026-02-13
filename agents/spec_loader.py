@@ -10,6 +10,8 @@ from runtime.schemas import BenchmarkTask
 
 @dataclass
 class AgentSpec:
+    """Parsed agent profile schema used by runtime services."""
+
     name: str
     backend: Dict[str, Any]
     prompt_template: str
@@ -21,10 +23,16 @@ class AgentSpec:
 
 
 class AgentSpecLoader:
+    """Loader for agent YAML profiles and resolved skill prompt text."""
+
     def __init__(self, base_dir: Path) -> None:
+        """Keep repository base path for skill directory resolution."""
+
         self.base_dir = base_dir
 
     def load(self, path: Path) -> Tuple[AgentSpec, str, Set[str]]:
+        """Load agent spec, render final system prompt, and derive allowed tools."""
+
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         spec = AgentSpec(
@@ -43,6 +51,8 @@ class AgentSpecLoader:
         return spec, prompt, allowed_tools
 
     def render_prompt(self, spec: AgentSpec, skills_text: str) -> str:
+        """Render profile prompt template by injecting loaded skills text."""
+
         base = spec.prompt_template
         # Simple placeholder replacement
         base = base.replace("{skills}", skills_text)
@@ -50,10 +60,14 @@ class AgentSpecLoader:
 
 
 def build_allowed_tools_from_skills(skill_names: List[str], base_dir: Path) -> Set[str]:
+    """Resolve allowed tools set from configured skill directories."""
+
     skill_dirs = [base_dir / "skills" / s for s in skill_names]
     _, allowed = load_skills(skill_dirs)
     return allowed
 
 
 def format_task_user_message(task: BenchmarkTask) -> str:
+    """Return task instruction payload for user-role message content."""
+
     return task.instruction

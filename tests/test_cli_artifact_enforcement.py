@@ -70,11 +70,9 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool =
                 "data_root": None,
             },
             "evaluation": {
-                "enabled": False,
                 "harness_cmd": "python -m swebench.harness.run_evaluation",
                 "eval_root": "./external/SWE-bench",
                 "workdir": ".",
-                "report_dir": "reports",
             },
             "runtime": {
                 "mode": "patch_only",
@@ -210,4 +208,3 @@ def test_derive_run_id_rejects_non_canonical_layout(tmp_path: Path):
     p.write_text("", encoding="utf-8")
     with pytest.raises(ValueError):
         eval_service.derive_run_id_from_predictions(p, artifacts_dir)
-

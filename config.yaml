@@ -1,9 +1,22 @@
-data_source: hf            # hf | local
-data_root: /path/to/jsonl  # only if local
-eval_root: ./external/SWE-bench
+benchmark:
+  name: swebench_verified
+  dataset_name: SWE-bench/SWE-bench_Verified
+  split: test
+  data_source: hf
+  data_root:
+  params: {}
 
-harness_cmd: "python -m swebench.harness.run_evaluation"
-dataset_name: "SWE-bench/SWE-bench_Verified"
+evaluation:
+  harness_cmd: python -m swebench.harness.run_evaluation
+  eval_root: ./external/SWE-bench
+  workdir: .
+  params: {}
 
-default_split: test
-runs_dir: runs
+runtime:
+  mode: patch_only
+  selector: 10
+  max_tool_calls: 20
+  max_wall_time_s: 600
+
+output:
+  artifacts_dir: artifacts

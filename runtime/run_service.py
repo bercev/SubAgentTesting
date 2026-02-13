@@ -19,6 +19,8 @@ from runtime.tools import ToolContext, ToolRegistry
 
 @dataclass
 class RunOutcome:
+    """Structured metadata returned after generating predictions."""
+
     run_id: str
     benchmark_name: str
     split_name: str
@@ -34,6 +36,8 @@ class RunOutcome:
 
 
 def _filter_tool_schemas(registry: ToolRegistry, allowed: set[str]) -> list[dict[str, Any]]:
+    """Keep only tool schemas explicitly allowed by the active policy."""
+
     schemas = []
     for schema in registry.schemas:
         name = schema.get("function", {}).get("name")
@@ -52,6 +56,8 @@ def execute_run(
     mode: Optional[str] = None,
     verbose: bool = False,
 ) -> RunOutcome:
+    """Execute benchmark tasks and write predictions/logs/manifest artifacts."""
+
     effective_config = apply_run_overrides(
         config,
         benchmark=benchmark,
@@ -99,6 +105,7 @@ def execute_run(
 
     with out_path.open("w", encoding="utf-8") as out_file:
         for task in tasks:
+            # Rebuild tooling/runtime per task so workspace context stays isolated.
             workspace_root = adapter.workspace_root_for_task(task)
             submitted_artifact: Dict[str, str] = {}
 
@@ -132,11 +139,13 @@ def execute_run(
                 tool_schemas=tool_schemas,
                 decoding_defaults=spec.decoding_defaults,
             )
+            # Explicit submit tool payload takes precedence over assistant free text.
             if submitted_artifact.get("artifact"):
                 result.final_artifact = submitted_artifact["artifact"]
 
             policy_result = apply_artifact_policy(result.final_artifact, task.expected_output_type)
             artifact = result.final_artifact
+            # Patch output remains pass-through; non-patch outputs use normalized artifact.
             if task.expected_output_type != "patch":
                 artifact = policy_result.artifact
 
@@ -214,4 +223,3 @@ def execute_run(
         run_log_path=run_log_path,
         manifest_payload=manifest_payload,
     )
-

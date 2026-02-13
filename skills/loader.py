@@ -1,10 +1,10 @@
-import re
 from pathlib import Path
-from typing import Dict, List, Set, Tuple
+from typing import List, Set, Tuple
 
 
 def load_skills(skill_dirs: List[Path]) -> Tuple[str, Set[str]]:
-    """Load SKILL.md files and return combined text + allowed tools."""
+    """Load skill markdown files and aggregate allowed-tool declarations."""
+
     combined_sections: List[str] = []
     allowed: Set[str] = set()
     for skill_dir in sorted(skill_dirs, key=lambda p: p.name):
@@ -19,13 +19,27 @@ def load_skills(skill_dirs: List[Path]) -> Tuple[str, Set[str]]:
 
 
 def _extract_allowed_tools(text: str) -> Set[str]:
+    """Parse `Allowed Tools:` block and return normalized tool name set."""
+
     allowed: Set[str] = set()
-    match = re.search(r"Allowed Tools:\s*(.+?)(\n\S|\Z)", text, flags=re.DOTALL)
-    if not match:
+    lines = text.splitlines()
+    start_idx = None
+    for idx, line in enumerate(lines):
+        if line.strip().lower() == "allowed tools:":
+            start_idx = idx + 1
+            break
+    if start_idx is None:
         return allowed
-    body = match.group(1)
-    for line in body.splitlines():
-        line = line.strip(" -*")
-        if line:
-            allowed.add(line)
+
+    # Consume contiguous bullet lines until next non-bullet/non-empty section line.
+    for line in lines[start_idx:]:
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("-"):
+            tool = stripped.lstrip("-").strip()
+            if tool:
+                allowed.add(tool)
+            continue
+        break
     return allowed

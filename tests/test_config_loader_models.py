@@ -18,11 +18,9 @@ def test_normalize_run_config_keeps_params_maps():
                 "params": {"subset": "mini"},
             },
             "evaluation": {
-                "enabled": True,
                 "harness_cmd": "python -m swebench.harness.run_evaluation",
                 "eval_root": "./external/SWE-bench",
                 "workdir": ".",
-                "report_dir": "reports",
                 "params": {"timeout_s": 900},
             },
             "runtime": {
@@ -38,26 +36,49 @@ def test_normalize_run_config_keeps_params_maps():
     assert cfg.evaluation.params["timeout_s"] == 900
 
 
-def test_normalize_run_config_supports_legacy_flat_keys():
-    cfg = normalize_run_config(
-        {
-            "benchmark": "swebench_verified",
-            "dataset_name": "SWE-bench/SWE-bench_Verified",
-            "default_split": "test",
-            "data_source": "hf",
-            "benchmark_params": {"dataset_revision": "main"},
-            "evaluation_params": {"retries": 1},
-            "mode": "A",
-            "selector": 3,
-            "max_tool_calls": 5,
-            "max_wall_time_s": 60,
-            "artifacts_dir": "artifacts",
-        }
-    )
-    assert cfg.benchmark.name == "swebench_verified"
-    assert cfg.runtime.mode == "patch_only"
-    assert cfg.benchmark.params["dataset_revision"] == "main"
-    assert cfg.evaluation.params["retries"] == 1
+def test_normalize_run_config_rejects_legacy_flat_keys():
+    with pytest.raises(ValueError):
+        normalize_run_config(
+            {
+                "benchmark": "swebench_verified",
+                "dataset_name": "SWE-bench/SWE-bench_Verified",
+                "default_split": "test",
+                "data_source": "hf",
+                "benchmark_params": {"dataset_revision": "main"},
+                "evaluation_params": {"retries": 1},
+                "mode": "A",
+                "selector": 3,
+                "max_tool_calls": 5,
+                "max_wall_time_s": 60,
+                "artifacts_dir": "artifacts",
+            }
+        )
+
+
+def test_normalize_run_config_rejects_mode_aliases():
+    with pytest.raises(ValueError):
+        normalize_run_config(
+            {
+                "benchmark": {
+                    "name": "swebench_verified",
+                    "dataset_name": "SWE-bench/SWE-bench_Verified",
+                    "split": "test",
+                    "data_source": "hf",
+                },
+                "evaluation": {
+                    "harness_cmd": "python -m swebench.harness.run_evaluation",
+                    "eval_root": "./external/SWE-bench",
+                    "workdir": ".",
+                },
+                "runtime": {
+                    "mode": "A",
+                    "selector": 1,
+                    "max_tool_calls": 2,
+                    "max_wall_time_s": 30,
+                },
+                "output": {"artifacts_dir": "artifacts"},
+            }
+        )
 
 
 def test_repo_run_configs_parse():

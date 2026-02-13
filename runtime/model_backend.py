@@ -1,7 +1,6 @@
 import json
 import os
 import random
-import re
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -11,12 +10,16 @@ import httpx
 
 @dataclass
 class ToolCall:
+    """One structured tool invocation emitted by the model backend."""
+
     name: str
     arguments: Dict[str, Any]
 
 
 @dataclass
 class GenerationResult:
+    """Backend generation output consumed by the runtime loop."""
+
     assistant_text: str
     tool_calls: List[ToolCall]
 
@@ -34,7 +37,7 @@ class ModelBackend:
 
 
 class OpenRouterBackend(ModelBackend):
-    """OpenAI-compatible backend targeting OpenRouter endpoints."""
+    """OpenAI-compatible backend targeting OpenRouter endpoints with retries."""
 
     _RETRYABLE_400_MARKERS = (
         "developer instruction is not enabled",
@@ -50,23 +53,25 @@ class OpenRouterBackend(ModelBackend):
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         base_url: str = "https://openrouter.ai/api/v1",
-        tool_call_extractor=None,
         max_retries: int = 8,
         initial_backoff_s: float = 1.0,
         max_backoff_s: float = 10.0,
     ) -> None:
-        self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
-        self.model = model or os.getenv("OPENROUTER_MODEL", "qwen2.5-coder-0.5b-instruct")
+        """Initialize backend with strict model requirements and retry policy."""
+
+        api_key_value = api_key or os.getenv("OPENROUTER_API_KEY")
+        model_value = model or os.getenv("OPENROUTER_MODEL")
+        if not api_key_value:
+            raise ValueError("OPENROUTER_API_KEY is required")
+        if not model_value:
+            raise ValueError("backend.model or OPENROUTER_MODEL is required")
+
+        self.api_key = api_key_value
+        self.model = model_value
         self.base_url = base_url.rstrip("/")
-        self.tool_call_extractor = tool_call_extractor or self._extract_tool_calls_from_text
         self.max_retries = max(0, int(max_retries))
         self.initial_backoff_s = max(0.0, float(initial_backoff_s))
         self.max_backoff_s = max(0.0, float(max_backoff_s))
-        if not self.api_key:
-            raise ValueError("OPENROUTER_API_KEY is required")
-        # OpenRouter expects provider-prefixed model ids (e.g., qwen/qwen2.5-coder-0.5b-instruct).
-        if "/" not in self.model and self.model.startswith("qwen"):
-            self.model = f"qwen/{self.model}"
 
     def generate(
         self,
@@ -74,6 +79,8 @@ class OpenRouterBackend(ModelBackend):
         tools: Optional[List[Dict[str, Any]]] = None,
         decoding: Optional[Dict[str, Any]] = None,
     ) -> GenerationResult:
+        """Call OpenRouter chat completions and return structured tool calls only."""
+
         payload: Dict[str, Any] = {
             "model": self.model,
             "messages": messages,
@@ -141,26 +148,24 @@ class OpenRouterBackend(ModelBackend):
         raw_tool_calls = message.get("tool_calls") or []
 
         tool_calls: List[ToolCall] = []
-        if raw_tool_calls:
-            for tc in raw_tool_calls:
-                func = tc.get("function", {}) if isinstance(tc, dict) else {}
-                name = func.get("name")
-                args = func.get("arguments")
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {"raw": args}
-                if name:
-                    tool_calls.append(ToolCall(name=name, arguments=args or {}))
-        elif tools:
-            # Fallback: extract from assistant text
-            tool_calls = self.tool_call_extractor(assistant_text)
+        for tc in raw_tool_calls:
+            func = tc.get("function", {}) if isinstance(tc, dict) else {}
+            name = func.get("name")
+            args = func.get("arguments")
+            if isinstance(args, str):
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError:
+                    args = {"raw": args}
+            if name:
+                tool_calls.append(ToolCall(name=name, arguments=args or {}))
 
         return GenerationResult(assistant_text=assistant_text, tool_calls=tool_calls)
 
     @classmethod
     def _is_retryable_status(cls, status_code: int, detail: str) -> bool:
+        """Mark transport/provider failures as retryable without masking fatal 4xx errors."""
+
         if status_code in {408, 409, 425, 429} or status_code >= 500:
             return True
         if status_code != 400:
@@ -169,6 +174,8 @@ class OpenRouterBackend(ModelBackend):
         return any(marker in lowered for marker in cls._RETRYABLE_400_MARKERS)
 
     def _sleep_before_retry(self, attempt: int) -> None:
+        """Sleep using bounded exponential backoff with jitter."""
+
         base = self.initial_backoff_s * (2**attempt)
         wait_s = min(self.max_backoff_s, base)
         if wait_s <= 0:
@@ -176,37 +183,6 @@ class OpenRouterBackend(ModelBackend):
         jitter_max = min(1.0, wait_s * 0.25)
         wait_s += random.uniform(0.0, jitter_max)
         time.sleep(wait_s)
-
-    @staticmethod
-    def _extract_tool_calls_from_text(text: str) -> List[ToolCall]:
-        """Heuristic extraction for Qwen-style inline tool calls."""
-        tool_calls: List[ToolCall] = []
-
-        # Pattern 1: fenced JSON blocks
-        for match in re.finditer(r"```json\s*(\{[\s\S]*?\})\s*```", text, flags=re.IGNORECASE):
-            try:
-                payload = json.loads(match.group(1))
-                if isinstance(payload, dict):
-                    name = payload.get("name") or payload.get("function", {}).get("name")
-                    args = payload.get("arguments") or payload.get("function", {}).get("arguments")
-                    if isinstance(args, str):
-                        args = json.loads(args)
-                    if name:
-                        tool_calls.append(ToolCall(name=name, arguments=args or {}))
-            except json.JSONDecodeError:
-                continue
-
-        # Pattern 2: <tool_call name="..."> ... </tool_call>
-        for match in re.finditer(r"<tool_call\s+name=\"([^\"]+)\">([\s\S]*?)</tool_call>", text):
-            name = match.group(1)
-            body = match.group(2).strip()
-            try:
-                args = json.loads(body)
-            except json.JSONDecodeError:
-                args = {"raw": body}
-            tool_calls.append(ToolCall(name=name, arguments=args))
-
-        return tool_calls
 
 
 class NoToolBackend(ModelBackend):
@@ -218,6 +194,8 @@ class NoToolBackend(ModelBackend):
         tools: Optional[List[Dict[str, Any]]] = None,
         decoding: Optional[Dict[str, Any]] = None,
     ) -> GenerationResult:
+        """Return last user content directly to keep patch-only smoke flows simple."""
+
         # Echo back last user message as a noop response.
         last_user = next((m for m in reversed(messages) if m.get("role") == "user"), {})
         content = last_user.get("content", "")

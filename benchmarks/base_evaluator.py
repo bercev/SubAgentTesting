@@ -9,7 +9,11 @@ from runtime.config_models import RunConfig
 
 
 class BaseHarnessEvaluator:
+    """Shared harness execution flow for benchmark evaluators."""
+
     def __init__(self) -> None:
+        """Initialize report/log relocation handles for latest run."""
+
         self.last_summary_report: Optional[Path] = None
         self.last_harness_log_root: Optional[Path] = None
         self._workdir: Path = Path.cwd()
@@ -20,6 +24,8 @@ class BaseHarnessEvaluator:
         run_id: str,
         config: RunConfig,
     ) -> subprocess.CompletedProcess[str]:
+        """Execute harness command and relocate canonical artifacts for this run."""
+
         evaluation = config.evaluation
         if not evaluation.harness_cmd:
             raise RuntimeError("harness_cmd not set; cannot run official harness")
@@ -51,9 +57,13 @@ class BaseHarnessEvaluator:
         return proc
 
     def build_command(self, predictions_path: Path, run_id: str, config: RunConfig) -> str:
+        """Build the benchmark-specific harness command line."""
+
         raise NotImplementedError
 
     def resolve_summary_report(self, stdout: str, run_id: str, run_root: Path) -> Optional[Path]:
+        """Resolve report path from harness stdout or canonical run-root location."""
+
         matches = re.findall(r"Report written to\s+([^\s]+\.json)", stdout or "")
         for raw_path in reversed(matches):
             candidate = Path(raw_path)
@@ -66,19 +76,16 @@ class BaseHarnessEvaluator:
         if canonical.exists():
             return canonical
 
-        in_run_root = sorted(run_root.glob(f"*.{run_id}.json"))
-        if in_run_root:
-            return in_run_root[-1]
-
-        fallback_matches = sorted(self._workdir.glob(f"*.{run_id}.json"))
-        if fallback_matches:
-            return fallback_matches[-1]
         return None
 
     def relocate_harness_logs(self, run_id: str, run_root: Path) -> Optional[Path]:
+        """Hook for benchmark-specific harness log relocation."""
+
         return None
 
     def _relocate_summary_report(self, stdout: str, run_id: str, run_root: Path) -> Optional[Path]:
+        """Move resolved summary report to canonical `report.json` location."""
+
         source = self.resolve_summary_report(stdout=stdout, run_id=run_id, run_root=run_root)
         if not source or not source.exists():
             return None
@@ -94,4 +101,3 @@ class BaseHarnessEvaluator:
             destination.unlink()
         source.replace(destination)
         return destination.resolve(strict=False)
-

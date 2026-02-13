@@ -114,11 +114,9 @@ benchmark:
   params: {}
 
 evaluation:
-  enabled: true
   harness_cmd: python -m swebench.harness.run_evaluation
   eval_root: ./external/SWE-bench
   workdir: .
-  report_dir: reports
   params: {}
 
 runtime:
@@ -340,11 +338,9 @@ benchmark:
   params: {}
 
 evaluation:
-  enabled: true
   harness_cmd: python -m my_harness.eval
   eval_root: .
   workdir: .
-  report_dir: reports
   params: {}
 
 runtime:
@@ -462,13 +458,11 @@ Notes:
 | `benchmark.data_source` | `str` | `hf` | No | Task source type (`hf` or `local`, adapter-dependent). |
 | `benchmark.data_root` | `str \| null` | `null` | No | Local data root when `data_source=local`. |
 | `benchmark.params` | `dict[str, Any]` | `{}` | No | Benchmark-specific extension map. |
-| `evaluation.enabled` | `bool` | `true` | No | Config flag retained for compatibility (eval command still explicitly controls evaluation). |
 | `evaluation.harness_cmd` | `str` | `python -m swebench.harness.run_evaluation` | No | Harness command used by evaluator. |
 | `evaluation.eval_root` | `str` | `./external/SWE-bench` | No | Required path for evaluator preflight checks. |
 | `evaluation.workdir` | `str` | `.` | No | Working directory for harness subprocess. |
-| `evaluation.report_dir` | `str` | `reports` | No | Compatibility field; canonical report output is `artifacts/<run_id>/report.json`. |
 | `evaluation.params` | `dict[str, Any]` | `{}` | No | Evaluator-specific extension map. |
-| `runtime.mode` | `str` | `patch_only` | No | Execution mode (`patch_only` or `tools_enabled`; legacy `A/B` normalized). |
+| `runtime.mode` | `str` | `patch_only` | No | Execution mode (`patch_only` or `tools_enabled`) with strict values only. |
 | `runtime.selector` | `int \| null` | `5` | No | Number of tasks to run (`null` means adapter default/all). |
 | `runtime.max_tool_calls` | `int` | `20` | No | Per-task tool-call budget. |
 | `runtime.max_wall_time_s` | `int` | `600` | No | Per-task wall-time budget in seconds. |
