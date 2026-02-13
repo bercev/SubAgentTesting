@@ -166,7 +166,17 @@ Each run also writes:
 artifacts/<run_id>/manifest.json
 ```
 
-`agent run` / `agent eval` are quiet by default. Use `--verbose` to print per-task validation details and full harness output.
+`agent run` / `agent predict` are quiet by default for per-task lines. Use `--verbose` to show per-task output.
+`agent eval` remains verbose by default; use `--quiet` to only print harness output on failure.
+
+Patch outputs are pass-through: `model_patch` keeps raw model output even when patch diagnostics mark it invalid.
+
+Quiet mode examples:
+
+```bash
+agent run --quiet --agent agents/openrouter_free.yaml --run-config configs/runs/default.yaml --mode patch_only --selector 10
+agent eval --quiet artifacts/<run_id>/predictions.jsonl --run-config configs/runs/default.yaml
+```
 
 ## Accuracy Summary
 

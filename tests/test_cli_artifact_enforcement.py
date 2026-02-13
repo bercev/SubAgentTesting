@@ -35,7 +35,7 @@ class _FakeAdapter:
         }
 
 
-def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool = False):
+def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool | None = False):
     task = BenchmarkTask(
         task_id="astropy__astropy-12907",
         instruction="Fix issue",
@@ -98,15 +98,17 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool =
     monkeypatch.setattr(cli, "_build_backend", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(cli, "AgentRuntime", _FakeRuntime)
 
-    cli.run(
+    run_kwargs = dict(
         agent="agents/qwen3_coder_free.yaml",
         benchmark=None,
         split=None,
         selector=None,
         mode="patch_only",
         run_config="ignored.yaml",
-        verbose=verbose,
     )
+    if verbose is not None:
+        run_kwargs["verbose"] = verbose
+    cli.run(**run_kwargs)
     out_files = list((tmp_path / "artifacts").glob("*/predictions.jsonl"))
     assert len(out_files) == 1
     records = [json.loads(line) for line in out_files[0].read_text(encoding="utf-8").splitlines() if line]
@@ -119,10 +121,10 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool =
     return records[0], out_files[0], manifest_path, run_log_path
 
 
-def test_cli_writes_empty_patch_for_invalid_patch_output(monkeypatch, tmp_path: Path):
+def test_cli_preserves_invalid_patch_output(monkeypatch, tmp_path: Path):
     record, _, _, _ = _run_once(monkeypatch, tmp_path, raw_artifact="I'll inspect files first.")
     assert record["instance_id"] == "astropy__astropy-12907"
-    assert record["model_patch"] == ""
+    assert record["model_patch"] == "I'll inspect files first."
 
 
 def test_cli_preserves_valid_patch_output(monkeypatch, tmp_path: Path):
@@ -154,10 +156,22 @@ def test_cli_creates_manifest(monkeypatch, tmp_path: Path):
     assert record["instance_id"] == "astropy__astropy-12907"
 
 
-def test_cli_quiet_default_suppresses_per_task_logs(monkeypatch, tmp_path: Path, capsys):
+def test_cli_quiet_suppresses_per_task_logs(monkeypatch, tmp_path: Path, capsys):
     _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=False)
     out = capsys.readouterr().out
     assert "artifact_valid" not in out
+    assert "Predictions written to" in out
+
+
+def test_cli_run_verbose_option_defaults_to_quiet():
+    verbose_option = cli.run.__defaults__[-1]
+    assert getattr(verbose_option, "default", None) is False
+
+
+def test_cli_verbose_prints_per_task_logs(monkeypatch, tmp_path: Path, capsys):
+    _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=True)
+    out = capsys.readouterr().out
+    assert "artifact_valid=" in out
     assert "Predictions written to" in out
 
 
@@ -166,6 +180,7 @@ def test_cli_writes_run_log_file(monkeypatch, tmp_path: Path):
     content = run_log_path.read_text(encoding="utf-8")
     assert "Starting run:" in content
     assert "Run summary:" in content
+    assert "artifact_valid=" in content
 
 
 def test_derive_run_id_from_artifacts_path(tmp_path: Path):

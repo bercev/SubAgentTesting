@@ -363,7 +363,11 @@ def run(
     selector: Optional[int] = typer.Option(None, help="Number of tasks override"),
     mode: Optional[str] = typer.Option(None, help="Mode override: patch_only or tools_enabled"),
     run_config: str = typer.Option("configs/runs/default.yaml", help="Run config path"),
-    verbose: bool = typer.Option(False, "--verbose", help="Print detailed per-task and runtime output"),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose/--quiet",
+        help="Quiet by default; use --verbose to print per-task terminal output.",
+    ),
 ):
     config = _load_run_config(Path(run_config))
     if benchmark:
@@ -461,9 +465,10 @@ def run(
                 result.final_artifact = submitted_artifact["artifact"]
 
             policy_result = apply_artifact_policy(result.final_artifact, task.expected_output_type)
-            artifact = policy_result.artifact
-            if not policy_result.valid and task.expected_output_type == "patch":
-                artifact = ""
+            # Patch outputs are pass-through by design. Policy remains diagnostics-only.
+            artifact = result.final_artifact
+            if task.expected_output_type != "patch":
+                artifact = policy_result.artifact
 
             if policy_result.valid:
                 valid_artifacts += 1
@@ -518,6 +523,7 @@ def run(
     _write_manifest(manifest_path, manifest_payload)
 
     print(f"Predictions written to {out_path}")
+    print("Patch handling: pass-through (invalid patches are retained; diagnostics only).")
     run_summary_line = (
         f"Run summary: run_id={run_id} tasks={len(tasks)} "
         f"valid_artifacts={valid_artifacts} invalid_artifacts={invalid_artifacts}"
@@ -539,7 +545,11 @@ def predict(
     split: Optional[str] = typer.Option(None),
     selector: Optional[int] = typer.Option(1),
     run_config: str = typer.Option("configs/runs/default.yaml"),
-    verbose: bool = typer.Option(False, "--verbose", help="Print detailed per-task and runtime output"),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose/--quiet",
+        help="Quiet by default; use --verbose to print per-task terminal output.",
+    ),
 ):
     run(
         agent=agent,
@@ -557,7 +567,11 @@ def eval(
     predictions: str = typer.Argument("artifacts/<run_id>/predictions.jsonl"),
     run_config: str = typer.Option("configs/runs/default.yaml"),
     benchmark: Optional[str] = typer.Option(None, help="Benchmark override"),
-    verbose: bool = typer.Option(False, "--verbose", help="Print full harness output"),
+    verbose: bool = typer.Option(
+        True,
+        "--verbose/--quiet",
+        help="Verbose by default; use --quiet to only show harness output on failure.",
+    ),
 ):
     config = _load_run_config(Path(run_config))
     if benchmark:

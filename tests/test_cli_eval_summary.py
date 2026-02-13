@@ -195,3 +195,98 @@ def test_eval_uses_zero_metrics_when_report_is_malformed(monkeypatch, tmp_path: 
     assert metrics["resolved_instances"] == 0
     assert metrics["submitted_instances"] == 0
     assert metrics["accuracy_resolved_submitted"] == 0.0
+
+
+def test_eval_verbose_default_prints_harness_output(monkeypatch, tmp_path: Path, capsys):
+    artifacts_dir = tmp_path / "artifacts"
+    run_id = "2026-02-13_010203"
+    run_root = artifacts_dir / run_id
+    predictions_path = run_root / "predictions.jsonl"
+    report_path = run_root / "report.json"
+    harness_log_root = run_root / "evaluation"
+
+    _write_predictions(predictions_path)
+    harness_log_root.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "total_instances": 1,
+                "submitted_instances": 1,
+                "completed_instances": 1,
+                "resolved_instances": 0,
+                "unresolved_instances": 1,
+                "empty_patch_instances": 0,
+                "error_instances": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evaluator = _FakeEvaluator(
+        report_path=report_path,
+        harness_log_root=harness_log_root,
+        stdout="HARNESS_STDOUT",
+        stderr="HARNESS_STDERR",
+    )
+    adapter = _FakeAdapter(evaluator=evaluator)
+
+    monkeypatch.setattr(cli, "_load_run_config", lambda _: _run_config(artifacts_dir))
+    monkeypatch.setattr(cli, "_build_adapter_from_config", lambda *_args, **_kwargs: adapter)
+
+    cli.eval(
+        predictions=str(predictions_path),
+        run_config="ignored.yaml",
+        benchmark=None,
+    )
+
+    out = capsys.readouterr().out
+    assert "HARNESS_STDOUT" in out
+    assert "HARNESS_STDERR" in out
+
+
+def test_eval_quiet_suppresses_harness_output_on_success(monkeypatch, tmp_path: Path, capsys):
+    artifacts_dir = tmp_path / "artifacts"
+    run_id = "2026-02-13_010203"
+    run_root = artifacts_dir / run_id
+    predictions_path = run_root / "predictions.jsonl"
+    report_path = run_root / "report.json"
+    harness_log_root = run_root / "evaluation"
+
+    _write_predictions(predictions_path)
+    harness_log_root.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "total_instances": 1,
+                "submitted_instances": 1,
+                "completed_instances": 1,
+                "resolved_instances": 0,
+                "unresolved_instances": 1,
+                "empty_patch_instances": 0,
+                "error_instances": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evaluator = _FakeEvaluator(
+        report_path=report_path,
+        harness_log_root=harness_log_root,
+        stdout="HARNESS_STDOUT",
+        stderr="HARNESS_STDERR",
+    )
+    adapter = _FakeAdapter(evaluator=evaluator)
+
+    monkeypatch.setattr(cli, "_load_run_config", lambda _: _run_config(artifacts_dir))
+    monkeypatch.setattr(cli, "_build_adapter_from_config", lambda *_args, **_kwargs: adapter)
+
+    cli.eval(
+        predictions=str(predictions_path),
+        run_config="ignored.yaml",
+        benchmark=None,
+        verbose=False,
+    )
+
+    out = capsys.readouterr().out
+    assert "HARNESS_STDOUT" not in out
+    assert "HARNESS_STDERR" not in out
