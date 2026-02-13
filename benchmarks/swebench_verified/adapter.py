@@ -115,3 +115,24 @@ class SWEbenchVerifiedAdapter:
             workdir=self.workdir,
             report_dir=self.report_dir,
         )
+
+    def to_prediction_record(
+        self,
+        task: BenchmarkTask,
+        artifact: str,
+        model_name_or_path: str,
+        model_name: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        repo = None
+        if metadata and metadata.get("repo"):
+            repo = metadata.get("repo")
+        elif task.resources and task.resources.get("repo"):
+            repo = task.resources.get("repo")
+        return {
+            "instance_id": task.task_id,
+            "model_patch": artifact,
+            "model_name_or_path": model_name_or_path,
+            "model_name": model_name,
+            "repo": repo,
+        }

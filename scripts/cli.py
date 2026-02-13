@@ -12,8 +12,8 @@ from rich import print
 from agents.spec_loader import AgentSpecLoader
 from benchmarks.registry import BenchmarkRegistry
 from runtime.agent_runtime import AgentRuntime
+from runtime.artifact_policy import apply_artifact_policy
 from runtime.model_backend import OpenRouterBackend
-from runtime.schemas import AgentResult
 from runtime.tools import ToolContext, ToolRegistry
 
 app = typer.Typer(add_completion=False)
@@ -160,6 +160,28 @@ def _build_adapter_from_config(config: Dict[str, Any], benchmark_name: str):
     )
 
 
+def _serialize_prediction_record(
+    adapter: Any,
+    task: Any,
+    artifact: str,
+    model_name_or_path: str,
+    model_name: str,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    serializer = getattr(adapter, "to_prediction_record", None)
+    if not callable(serializer):
+        raise AttributeError(
+            f"Adapter {type(adapter).__name__} must implement to_prediction_record(...)"
+        )
+    return serializer(
+        task=task,
+        artifact=artifact,
+        model_name_or_path=model_name_or_path,
+        model_name=model_name,
+        metadata=metadata or {},
+    )
+
+
 @app.command()
 def list():
     """List available agents, benchmarks, and run configs."""
@@ -243,16 +265,30 @@ def run(
             if submitted_artifact.get("artifact"):
                 result.final_artifact = submitted_artifact["artifact"]
 
-            record = {
-                "instance_id": result.task_id,
-                "model_patch": result.final_artifact,
-                "model_name_or_path": spec.backend.get("model", spec.name),
-                "model_name": spec.name,
-                "repo": result.metadata.get("repo") if result.metadata else None,
-            }
+            policy_result = apply_artifact_policy(result.final_artifact, task.expected_output_type)
+            artifact = policy_result.artifact
+            if not policy_result.valid and task.expected_output_type == "patch":
+                artifact = ""
+
+            record = _serialize_prediction_record(
+                adapter=adapter,
+                task=task,
+                artifact=artifact,
+                model_name_or_path=spec.backend.get("model", spec.name),
+                model_name=spec.name,
+                metadata=result.metadata,
+            )
             out_file.write(json.dumps(record) + "\n")
             out_file.flush()
-            print({"task": task.task_id, "terminated": result.metadata.get("terminated")})
+            print(
+                {
+                    "task": task.task_id,
+                    "terminated": result.metadata.get("terminated") if result.metadata else False,
+                    "output_type": task.expected_output_type,
+                    "artifact_valid": policy_result.valid,
+                    "artifact_reason": policy_result.reason,
+                }
+            )
 
     print(f"Wrote predictions to {out_path}")
 
@@ -305,6 +341,9 @@ def eval(
         run_id=datetime.now().strftime("%Y-%m-%d_%H%M%S"),
     )
     print(proc.stdout)
+    relocated_report = getattr(evaluator, "last_summary_report", None)
+    if relocated_report:
+        print(f"Relocated report to {relocated_report}")
     if proc.returncode != 0:
         print(proc.stderr)
 

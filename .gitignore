@@ -55,8 +55,12 @@ next-env.d.ts
 .pytest_cache/
 __pycache__/
 
-# clerk configuration (can include secrets)
+# other
 /.clerk/
 .agents/
 .cursor/
 .swc/
+summaries/
+
+# runs (to reduce commit size)
+runs/

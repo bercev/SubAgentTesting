@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 import tempfile
 from pathlib import Path
@@ -19,6 +20,7 @@ class SWEbenchEvaluator:
         self.harness_cmd = harness_cmd
         self.workdir = workdir
         self.report_dir = report_dir
+        self.last_summary_report: "Path | None" = None
 
     def write_predictions(self, results: Iterable[AgentResult], model_name: str, out_path: Path) -> Path:
         out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -62,7 +64,18 @@ class SWEbenchEvaluator:
             f"-id {run_id} "
             f"--report_dir {report_dir_abs.resolve()}"
         )
-        return subprocess.run(cmd, shell=True, cwd=self.workdir, capture_output=True, text=True)
+        proc = subprocess.run(cmd, shell=True, cwd=self.workdir, capture_output=True, text=True)
+        self.last_summary_report = self._relocate_summary_report(
+            stdout=proc.stdout,
+            run_id=run_id,
+            report_dir_abs=report_dir_abs,
+        )
+        if self.last_summary_report:
+            proc.stdout = (
+                f"{proc.stdout.rstrip()}\n"
+                f"Report relocated to {self.last_summary_report}\n"
+            )
+        return proc
 
     def _ensure_model_key(self, predictions_path: Path) -> Path:
         if predictions_path.suffix != ".jsonl":
@@ -80,3 +93,39 @@ class SWEbenchEvaluator:
             for rec in lines:
                 tmp.write(json.dumps(rec) + "\n")
         return Path(tmp.name)
+
+    def _relocate_summary_report(
+        self,
+        stdout: str,
+        run_id: str,
+        report_dir_abs: Path,
+    ) -> "Path | None":
+        source = self._resolve_summary_report(stdout=stdout, run_id=run_id)
+        if not source or not source.exists():
+            return None
+
+        destination = report_dir_abs / source.name
+        source_resolved = source.resolve(strict=False)
+        destination_resolved = destination.resolve(strict=False)
+        if source_resolved == destination_resolved:
+            return destination_resolved
+
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists():
+            destination.unlink()
+        source.replace(destination)
+        return destination.resolve(strict=False)
+
+    def _resolve_summary_report(self, stdout: str, run_id: str) -> "Path | None":
+        matches = re.findall(r"Report written to\s+([^\s]+\.json)", stdout or "")
+        for raw_path in reversed(matches):
+            candidate = Path(raw_path)
+            if not candidate.is_absolute():
+                candidate = self.workdir / candidate
+            if candidate.exists():
+                return candidate
+
+        fallback_matches = sorted(self.workdir.glob(f"*.{run_id}.json"))
+        if len(fallback_matches) == 1:
+            return fallback_matches[0]
+        return None
