@@ -95,6 +95,7 @@ benchmark:
   split: test
   data_source: hf
   data_root:
+  params: {}
 
 evaluation:
   enabled: true
@@ -102,6 +103,7 @@ evaluation:
   eval_root: ./external/SWE-bench
   workdir: .
   report_dir: reports
+  params: {}
 
 runtime:
   mode: patch_only
@@ -112,6 +114,26 @@ runtime:
 output:
   artifacts_dir: artifacts
 ```
+
+## Architecture
+
+- `scripts/cli.py`: thin Typer entrypoint (`agent run/predict/eval/list`) and terminal output only.
+- `runtime/config_loader.py`: config read + normalization + typed validation.
+- `runtime/backend_factory.py`: backend construction from agent spec.
+- `runtime/run_service.py`: task loop orchestration, prediction writes, diagnostics, manifest/run log writes.
+- `runtime/eval_service.py`: evaluator execution, report metrics parse, manifest updates.
+- `runtime/metrics.py`: report metric parsing and formatting.
+- `runtime/manifest_store.py`: stable manifest and run-log read/write helpers.
+- `benchmarks/contracts.py`: adapter/evaluator interfaces.
+- `benchmarks/registry.py` + `benchmarks/discovery.py`: benchmark adapter discovery and lookup.
+- `benchmarks/base_evaluator.py`: reusable harness evaluator flow with benchmark hooks.
+
+Data flow:
+1. CLI loads typed config.
+2. Benchmark adapter is discovered by `benchmark.name`.
+3. Run service loads tasks and writes `artifacts/<run_id>/predictions.jsonl`.
+4. Eval service invokes benchmark evaluator and relocates canonical outputs.
+5. Metrics are parsed from `report.json` and persisted to `manifest.json`.
 
 ## Commands
 
@@ -147,7 +169,7 @@ Evaluate predictions:
 
 ```bash
 agent eval \
-  artifacts/<run_id>/predictions/<model>/<split>/<mode>/predictions.jsonl \
+  artifacts/<run_id>/predictions.jsonl \
   --run-config configs/runs/default.yaml
 ```
 
@@ -156,19 +178,25 @@ agent eval \
 Predictions are written to:
 
 ```text
-artifacts/<run_id>/predictions/<model>/<split>/<mode>/predictions.jsonl
+artifacts/<run_id>/predictions.jsonl
+```
+
+Run logs are written to:
+
+```text
+artifacts/<run_id>/run.log
 ```
 
 Harness logs are relocated to:
 
 ```text
-artifacts/<run_id>/evaluation/harness/<model>/<instance_id>/
+artifacts/<run_id>/evaluation/<instance_id>/
 ```
 
-Harness reports are written to:
+Harness report is written to:
 
 ```text
-artifacts/<run_id>/reports/
+artifacts/<run_id>/report.json
 ```
 
 Each run also writes:
@@ -177,7 +205,30 @@ Each run also writes:
 artifacts/<run_id>/manifest.json
 ```
 
-`agent run` / `agent eval` are quiet by default. Use `--verbose` to print per-task validation details and full harness output.
+`agent run` / `agent predict` are quiet by default for per-task lines. Use `--verbose` to show per-task output.
+`agent eval` remains verbose by default; use `--quiet` to only print harness output on failure.
+
+Patch outputs are pass-through: `model_patch` keeps raw model output even when patch diagnostics mark it invalid.
+
+Quiet mode examples:
+
+```bash
+agent run --quiet --agent agents/openrouter_free.yaml --run-config configs/runs/default.yaml --mode patch_only --selector 10
+agent eval --quiet artifacts/<run_id>/predictions.jsonl --run-config configs/runs/default.yaml
+```
+
+## Accuracy Summary
+
+During `agent eval`, the CLI prints a concise summary line with:
+- `resolved/submitted` accuracy (primary)
+- resolved/completed and completion(submitted) rates
+- unresolved/error/empty patch counts
+
+The same metrics are persisted under:
+
+```text
+artifacts/<run_id>/manifest.json -> evaluation.metrics
+```
 
 ## Portability
 
@@ -185,6 +236,22 @@ Swap providers/models/datasets without code changes:
 1. pick an agent profile in `agents/`
 2. pick a run config in `configs/runs/`
 3. run `agent run` with optional CLI overrides
+
+## Add A New Benchmark
+
+Minimum path:
+1. Add `benchmarks/<name>/adapter.py` implementing the adapter contract in `benchmarks/contracts.py`.
+2. Set `benchmark_name = "<name>"` on the adapter class.
+3. Implement:
+   - `from_config`
+   - `load_tasks`
+   - `workspace_root_for_task`
+   - `to_prediction_record`
+   - `get_evaluator`
+4. Optionally add `benchmarks/<name>/evaluator.py` if `benchmarks/base_evaluator.py` hooks are not enough.
+5. Add a run config template under `configs/runs/` for that benchmark.
+
+No registry edits are required in the common case; discovery picks up `benchmarks/*/adapter.py` automatically.
 
 ## Presets
 

@@ -4,13 +4,28 @@ from pathlib import Path
 import pytest
 
 import scripts.cli as cli
+import runtime.eval_service as eval_service
+import runtime.run_service as run_service
 from agents.spec_loader import AgentSpec
+from runtime.config_loader import normalize_run_config
 from runtime.schemas import AgentResult, BenchmarkTask
 
 
 class _FakeAdapter:
+    benchmark_name = "swebench_verified"
+
     def __init__(self, task: BenchmarkTask):
         self._task = task
+
+    @classmethod
+    def from_config(cls, config):
+        task = BenchmarkTask(
+            task_id="astropy__astropy-12907",
+            instruction="Fix issue",
+            resources={"repo": "astropy/astropy"},
+            expected_output_type="patch",
+        )
+        return cls(task=task)
 
     def load_tasks(self, split: str, selector: int | None = None):
         return [self._task]
@@ -34,41 +49,44 @@ class _FakeAdapter:
             "repo": (metadata or {}).get("repo"),
         }
 
+    def get_evaluator(self, config):
+        raise NotImplementedError
 
-def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool | None = False):
-    task = BenchmarkTask(
-        task_id="astropy__astropy-12907",
-        instruction="Fix issue",
-        resources={"repo": "astropy/astropy"},
-        expected_output_type="patch",
+
+class _FakeRegistry:
+    def get_adapter(self, name: str):
+        assert name == "swebench_verified"
+        return _FakeAdapter
+
+
+def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool = False):
+    run_config = normalize_run_config(
+        {
+            "benchmark": {
+                "name": "swebench_verified",
+                "dataset_name": "SWE-bench/SWE-bench_Verified",
+                "split": "test",
+                "data_source": "hf",
+                "data_root": None,
+            },
+            "evaluation": {
+                "enabled": False,
+                "harness_cmd": "python -m swebench.harness.run_evaluation",
+                "eval_root": "./external/SWE-bench",
+                "workdir": ".",
+                "report_dir": "reports",
+            },
+            "runtime": {
+                "mode": "patch_only",
+                "selector": 1,
+                "max_tool_calls": 1,
+                "max_wall_time_s": 10,
+            },
+            "output": {
+                "artifacts_dir": str(tmp_path / "artifacts"),
+            },
+        }
     )
-    adapter = _FakeAdapter(task=task)
-
-    run_config = {
-        "benchmark": {
-            "name": "swebench_verified",
-            "dataset_name": "SWE-bench/SWE-bench_Verified",
-            "split": "test",
-            "data_source": "hf",
-            "data_root": None,
-        },
-        "evaluation": {
-            "enabled": False,
-            "harness_cmd": "python -m swebench.harness.run_evaluation",
-            "eval_root": "./external/SWE-bench",
-            "workdir": ".",
-            "report_dir": "logs/reports",
-        },
-        "runtime": {
-            "mode": "patch_only",
-            "selector": 1,
-            "max_tool_calls": 1,
-            "max_wall_time_s": 10,
-        },
-        "output": {
-            "artifacts_dir": str(tmp_path / "artifacts"),
-        },
-    }
 
     spec = AgentSpec(
         name="fake-agent",
@@ -92,42 +110,37 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool |
                 metadata={"terminated": True, "repo": "astropy/astropy"},
             )
 
-    monkeypatch.setattr(cli, "_load_run_config", lambda _: run_config)
-    monkeypatch.setattr(cli, "_build_adapter_from_config", lambda *_args, **_kwargs: adapter)
-    monkeypatch.setattr(cli.AgentSpecLoader, "load", lambda *_args, **_kwargs: (spec, "Prompt", set()))
-    monkeypatch.setattr(cli, "_build_backend", lambda *_args, **_kwargs: object())
-    monkeypatch.setattr(cli, "AgentRuntime", _FakeRuntime)
-
-    run_kwargs = dict(
-        agent="agents/qwen3_coder_free.yaml",
-        benchmark=None,
-        split=None,
-        selector=None,
-        mode="patch_only",
-        run_config="ignored.yaml",
+    monkeypatch.setattr(run_service, "BenchmarkRegistry", lambda: _FakeRegistry())
+    monkeypatch.setattr(
+        run_service.AgentSpecLoader,
+        "load",
+        lambda *_args, **_kwargs: (spec, "Prompt", set()),
     )
-    if verbose is not None:
-        run_kwargs["verbose"] = verbose
-    cli.run(**run_kwargs)
-    out_files = list((tmp_path / "artifacts").glob("*/predictions.jsonl"))
-    assert len(out_files) == 1
-    records = [json.loads(line) for line in out_files[0].read_text(encoding="utf-8").splitlines() if line]
+    monkeypatch.setattr(run_service, "build_backend", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(run_service, "AgentRuntime", _FakeRuntime)
+
+    outcome = run_service.execute_run(
+        agent_path="agents/qwen3_coder_free.yaml",
+        config=run_config,
+        verbose=verbose,
+    )
+
+    records = [
+        json.loads(line)
+        for line in outcome.predictions_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
     assert len(records) == 1
-    run_root = out_files[0].parent
-    manifest_path = run_root / "manifest.json"
-    run_log_path = run_root / "run.log"
-    assert manifest_path.exists()
-    assert run_log_path.exists()
-    return records[0], out_files[0], manifest_path, run_log_path
+    return records[0], outcome
 
 
-def test_cli_preserves_invalid_patch_output(monkeypatch, tmp_path: Path):
-    record, _, _, _ = _run_once(monkeypatch, tmp_path, raw_artifact="I'll inspect files first.")
+def test_run_service_preserves_invalid_patch_output(monkeypatch, tmp_path: Path):
+    record, _ = _run_once(monkeypatch, tmp_path, raw_artifact="I'll inspect files first.")
     assert record["instance_id"] == "astropy__astropy-12907"
     assert record["model_patch"] == "I'll inspect files first."
 
 
-def test_cli_preserves_valid_patch_output(monkeypatch, tmp_path: Path):
+def test_run_service_preserves_valid_patch_output(monkeypatch, tmp_path: Path):
     valid_patch = (
         "diff --git a/example.py b/example.py\n"
         "index 1111111..2222222 100644\n"
@@ -137,15 +150,15 @@ def test_cli_preserves_valid_patch_output(monkeypatch, tmp_path: Path):
         "-old\n"
         "+new\n"
     )
-    record, _, _, _ = _run_once(monkeypatch, tmp_path, raw_artifact=valid_patch)
+    record, _ = _run_once(monkeypatch, tmp_path, raw_artifact=valid_patch)
     assert record["model_patch"] == valid_patch
 
 
-def test_cli_creates_manifest(monkeypatch, tmp_path: Path):
-    record, predictions_path, manifest_path, _ = _run_once(monkeypatch, tmp_path, raw_artifact="")
-    payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-    assert payload["run_id"] == manifest_path.parent.name
-    assert payload["predictions_path"] == str(predictions_path.resolve())
+def test_run_service_creates_manifest(monkeypatch, tmp_path: Path):
+    record, outcome = _run_once(monkeypatch, tmp_path, raw_artifact="")
+    payload = json.loads(outcome.manifest_path.read_text(encoding="utf-8"))
+    assert payload["run_id"] == outcome.run_id
+    assert payload["predictions_path"] == str(outcome.predictions_path.resolve())
     assert payload["model_name"] == "fake-agent"
     assert payload["model_name_or_path"] == "fake/model"
     assert payload["evaluation"]["status"] == "not_run"
@@ -156,11 +169,10 @@ def test_cli_creates_manifest(monkeypatch, tmp_path: Path):
     assert record["instance_id"] == "astropy__astropy-12907"
 
 
-def test_cli_quiet_suppresses_per_task_logs(monkeypatch, tmp_path: Path, capsys):
+def test_run_service_quiet_suppresses_per_task_logs(monkeypatch, tmp_path: Path, capsys):
     _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=False)
     out = capsys.readouterr().out
     assert "artifact_valid" not in out
-    assert "Predictions written to" in out
 
 
 def test_cli_run_verbose_option_defaults_to_quiet():
@@ -168,16 +180,15 @@ def test_cli_run_verbose_option_defaults_to_quiet():
     assert getattr(verbose_option, "default", None) is False
 
 
-def test_cli_verbose_prints_per_task_logs(monkeypatch, tmp_path: Path, capsys):
+def test_run_service_verbose_prints_per_task_logs(monkeypatch, tmp_path: Path, capsys):
     _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=True)
     out = capsys.readouterr().out
     assert "artifact_valid=" in out
-    assert "Predictions written to" in out
 
 
-def test_cli_writes_run_log_file(monkeypatch, tmp_path: Path):
-    _, _, _, run_log_path = _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=False)
-    content = run_log_path.read_text(encoding="utf-8")
+def test_run_service_writes_run_log_file(monkeypatch, tmp_path: Path):
+    _, outcome = _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=False)
+    content = outcome.run_log_path.read_text(encoding="utf-8")
     assert "Starting run:" in content
     assert "Run summary:" in content
     assert "artifact_valid=" in content
@@ -189,7 +200,7 @@ def test_derive_run_id_from_artifacts_path(tmp_path: Path):
     p = artifacts_dir / run_id / "predictions.jsonl"
     p.parent.mkdir(parents=True)
     p.write_text("", encoding="utf-8")
-    assert cli._derive_run_id_from_predictions(p, artifacts_dir) == run_id
+    assert eval_service.derive_run_id_from_predictions(p, artifacts_dir) == run_id
 
 
 def test_derive_run_id_rejects_non_canonical_layout(tmp_path: Path):
@@ -198,4 +209,5 @@ def test_derive_run_id_rejects_non_canonical_layout(tmp_path: Path):
     p.parent.mkdir(parents=True)
     p.write_text("", encoding="utf-8")
     with pytest.raises(ValueError):
-        cli._derive_run_id_from_predictions(p, artifacts_dir)
+        eval_service.derive_run_id_from_predictions(p, artifacts_dir)
+

@@ -4,6 +4,10 @@ benchmark:
   split: test
   data_source: hf
   data_root:
+  params:
+    # Optional benchmark-specific passthrough values consumed by adapter/evaluator.
+    # Example: subset: mini
+    {}
 
 evaluation:
   enabled: true
@@ -11,6 +15,10 @@ evaluation:
   eval_root: ./external/SWE-bench
   workdir: .
   report_dir: reports
+  params:
+    # Optional evaluator-specific passthrough values.
+    # Example: timeout_s: 900
+    {}
 
 runtime:
   mode: patch_only

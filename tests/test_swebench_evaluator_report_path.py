@@ -3,6 +3,36 @@ import subprocess
 from pathlib import Path
 
 from benchmarks.swebench_verified.evaluator import SWEbenchEvaluator
+from runtime.config_loader import normalize_run_config
+
+
+def _run_config(artifacts_dir: Path, eval_root: Path, workdir: Path):
+    return normalize_run_config(
+        {
+            "benchmark": {
+                "name": "swebench_verified",
+                "dataset_name": "SWE-bench/SWE-bench_Verified",
+                "split": "test",
+                "data_source": "hf",
+            },
+            "evaluation": {
+                "enabled": True,
+                "harness_cmd": "python -m swebench.harness.run_evaluation",
+                "eval_root": str(eval_root),
+                "workdir": str(workdir),
+                "report_dir": "reports",
+            },
+            "runtime": {
+                "mode": "patch_only",
+                "selector": 1,
+                "max_tool_calls": 1,
+                "max_wall_time_s": 10,
+            },
+            "output": {
+                "artifacts_dir": str(artifacts_dir),
+            },
+        }
+    )
 
 
 def test_run_harness_relocates_summary_report_to_report_dir(monkeypatch, tmp_path: Path):
@@ -10,8 +40,6 @@ def test_run_harness_relocates_summary_report_to_report_dir(monkeypatch, tmp_pat
     workdir.mkdir(parents=True)
     eval_root = tmp_path / "external" / "SWE-bench"
     eval_root.mkdir(parents=True)
-    report_dir = tmp_path / "logs" / "reports"
-    report_dir.mkdir(parents=True)
     artifacts_dir = tmp_path / "artifacts"
     artifacts_dir.mkdir(parents=True)
 
@@ -25,12 +53,8 @@ def test_run_harness_relocates_summary_report_to_report_dir(monkeypatch, tmp_pat
     }
     predictions_path.write_text(json.dumps(record) + "\n", encoding="utf-8")
 
-    evaluator = SWEbenchEvaluator(
-        eval_root=eval_root,
-        harness_cmd="python -m swebench.harness.run_evaluation",
-        workdir=workdir,
-        report_dir=report_dir,
-    )
+    cfg = _run_config(artifacts_dir=artifacts_dir, eval_root=eval_root, workdir=workdir)
+    evaluator = SWEbenchEvaluator()
     run_id = "2026-02-12_165543"
     source_name = f"qwen__qwen3-coder:free.{run_id}.json"
     source_path = workdir / source_name
@@ -55,13 +79,7 @@ def test_run_harness_relocates_summary_report_to_report_dir(monkeypatch, tmp_pat
         )
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    proc = evaluator.run_harness(
-        predictions_path=predictions_path,
-        dataset_name="SWE-bench/SWE-bench_Verified",
-        split="test",
-        run_id=run_id,
-        artifacts_dir=artifacts_dir,
-    )
+    proc = evaluator.run_harness(predictions_path=predictions_path, run_id=run_id, config=cfg)
 
     relocated = artifacts_dir / run_id / "report.json"
     relocated_harness = artifacts_dir / run_id / "evaluation"
@@ -83,20 +101,14 @@ def test_run_harness_relocates_with_instance_collision(monkeypatch, tmp_path: Pa
     workdir.mkdir(parents=True)
     eval_root = tmp_path / "external" / "SWE-bench"
     eval_root.mkdir(parents=True)
-    report_dir = tmp_path / "logs" / "reports"
-    report_dir.mkdir(parents=True)
     artifacts_dir = tmp_path / "artifacts"
     artifacts_dir.mkdir(parents=True)
 
     predictions_path = tmp_path / "predictions.jsonl"
     predictions_path.write_text("{}", encoding="utf-8")
 
-    evaluator = SWEbenchEvaluator(
-        eval_root=eval_root,
-        harness_cmd="python -m swebench.harness.run_evaluation",
-        workdir=workdir,
-        report_dir=report_dir,
-    )
+    cfg = _run_config(artifacts_dir=artifacts_dir, eval_root=eval_root, workdir=workdir)
+    evaluator = SWEbenchEvaluator()
     run_id = "2026-02-12_165544"
     source_name = f"qwen__qwen3-coder:free.{run_id}.json"
     source_path = workdir / source_name
@@ -118,13 +130,7 @@ def test_run_harness_relocates_with_instance_collision(monkeypatch, tmp_path: Pa
         )
 
     monkeypatch.setattr(subprocess, "run", _fake_run)
-    evaluator.run_harness(
-        predictions_path=predictions_path,
-        dataset_name="SWE-bench/SWE-bench_Verified",
-        split="test",
-        run_id=run_id,
-        artifacts_dir=artifacts_dir,
-    )
+    evaluator.run_harness(predictions_path=predictions_path, run_id=run_id, config=cfg)
 
     dest_root = artifacts_dir / run_id / "evaluation"
     assert (dest_root / "same-instance").exists()

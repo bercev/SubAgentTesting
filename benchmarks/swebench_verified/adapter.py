@@ -2,27 +2,33 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, cast
 
+from runtime.config_models import RunConfig
 from runtime.schemas import BenchmarkTask
 
 
 class SWEbenchVerifiedAdapter:
+    benchmark_name = "swebench_verified"
+
     def __init__(
         self,
         data_source: str = "hf",
         data_root: Optional[str] = None,
         dataset_name: str = "SWE-bench/SWE-bench_Verified",
-        eval_root: Optional[str] = None,
-        harness_cmd: Optional[str] = None,
-        workdir: Optional[str] = None,
-        report_dir: Optional[str] = None,
+        params: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.data_source = data_source
         self.data_root = Path(data_root) if data_root else None
         self.dataset_name = dataset_name
-        self.eval_root = Path(eval_root) if eval_root else None
-        self.harness_cmd = harness_cmd
-        self.workdir = Path(workdir).resolve() if workdir else Path.cwd()
-        self.report_dir = Path(report_dir) if report_dir else (self.workdir / "logs" / "reports")
+        self.params = params or {}
+
+    @classmethod
+    def from_config(cls, config: RunConfig) -> "SWEbenchVerifiedAdapter":
+        return cls(
+            data_source=config.benchmark.data_source,
+            data_root=config.benchmark.data_root,
+            dataset_name=config.benchmark.dataset_name,
+            params=config.benchmark.params,
+        )
 
     def load_tasks(self, split: str = "dev", selector: Optional[int] = None) -> List[BenchmarkTask]:
         """
@@ -128,15 +134,10 @@ class SWEbenchVerifiedAdapter:
             return self.data_root
         return Path(".")
 
-    def get_evaluator(self):
+    def get_evaluator(self, config: RunConfig):
         from benchmarks.swebench_verified.evaluator import SWEbenchEvaluator
 
-        return SWEbenchEvaluator(
-            eval_root=self.eval_root,
-            harness_cmd=self.harness_cmd,
-            workdir=self.workdir,
-            report_dir=self.report_dir,
-        )
+        return SWEbenchEvaluator()
 
     def to_prediction_record(
         self,

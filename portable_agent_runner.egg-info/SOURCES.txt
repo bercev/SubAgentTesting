@@ -4,6 +4,9 @@ setup.cfg
 agents/__init__.py
 agents/spec_loader.py
 benchmarks/__init__.py
+benchmarks/base_evaluator.py
+benchmarks/contracts.py
+benchmarks/discovery.py
 benchmarks/registry.py
 benchmarks/swebench_verified/__init__.py
 benchmarks/swebench_verified/adapter.py
@@ -17,7 +20,14 @@ portable_agent_runner.egg-info/top_level.txt
 runtime/__init__.py
 runtime/agent_runtime.py
 runtime/artifact_policy.py
+runtime/backend_factory.py
+runtime/config_loader.py
+runtime/config_models.py
+runtime/eval_service.py
+runtime/manifest_store.py
+runtime/metrics.py
 runtime/model_backend.py
+runtime/run_service.py
 runtime/schemas.py
 runtime/tools.py
 scripts/__init__.py
@@ -26,7 +36,11 @@ skills/__init__.py
 skills/loader.py
 tests/test_agent_prompts_contract.py
 tests/test_artifact_policy.py
+tests/test_benchmark_discovery.py
 tests/test_cli_artifact_enforcement.py
+tests/test_cli_eval_summary.py
+tests/test_config_loader_models.py
+tests/test_model_backend_retry.py
 tests/test_skills_loader.py
 tests/test_spec_loader.py
 tests/test_swebench_evaluator_report_path.py
