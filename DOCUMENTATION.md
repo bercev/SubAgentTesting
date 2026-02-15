@@ -6,14 +6,29 @@ This document is a fast map of the Python runtime/evaluation stack so you can se
 Scope covered in this file:
 - `runtime/*`
 - `benchmarks/*`
+- `external/*` (third-party harnesses/assets used during eval)
 - `skills/loader.py`
 - `scripts/cli.py`
+- `scripts/bootstrap.sh`
 - `agents/spec_loader.py`
 
 Important existing interfaces and types (no API changes in this doc):
 - `benchmarks/contracts.py` (adapter/evaluator protocols)
 - `runtime/schemas.py` (`BenchmarkTask`, `AgentResult`)
 - `runtime/config_models.py` (typed run config schema)
+
+## Benchmark Code vs External Assets
+- Put runner-owned benchmark integration code in `benchmarks/<name>/` (`adapter.py`, optional `evaluator.py`).
+- Put third-party harness code or vendor assets in `external/<project>/` (example: `external/SWE-bench`).
+- Adapter discovery only scans `benchmarks/*/adapter.py` via `benchmarks/discovery.py`; nothing is discovered from `external/`.
+- Use `evaluation.eval_root` to point evaluators at harness roots (often under `external/`).
+- Use `benchmark.data_root` for local benchmark data/repo roots (can be under `external/`, but does not have to be).
+
+### Use Cases for External Benchmark Repos
+- Evaluation logic is owned by the benchmark project itself (for example, the SWE-bench harness), not by this runner.
+- Bootstrap installs that harness from the local clone so `agent eval` can run it in the same virtual environment.
+- `evaluation.eval_root` provides a concrete local preflight target for evaluator checks.
+- `external/` cleanly separates third-party benchmark code from runner-owned code (`runtime/*`, `benchmarks/*`).
 
 ## Connectivity Diagram
 ```mermaid
@@ -83,6 +98,7 @@ flowchart TD
 
 ### New benchmark/dataset/evaluator
 - Primary touchpoints: new `benchmarks/<name>/adapter.py`, optional `benchmarks/<name>/evaluator.py`, shared contracts in `benchmarks/contracts.py`, discovery via `benchmarks/discovery.py` and lookup in `benchmarks/registry.py`.
+- Placement rule: benchmark Python integration always lives under `benchmarks/<name>/`; use `external/` only for third-party harness/data dependencies referenced by config (`evaluation.eval_root`, `benchmark.data_root`).
 - Keep run/eval services generic: `runtime/run_service.py` and `runtime/eval_service.py` should not need benchmark-specific branching.
 
 ### Core runtime behavior and artifacts
@@ -94,6 +110,7 @@ flowchart TD
 | File | Responsibility | Edit When |
 | --- | --- | --- |
 | `scripts/cli.py` | Typer CLI entrypoint for `list`, `run`, `predict`, and `eval`; prints terminal summaries. | CLI flags/commands, command wiring, or output messaging changes. |
+| `scripts/bootstrap.sh` | Bootstrap script that prepares `.venv`, clones SWE-bench under `external/`, and installs it editable. | Local setup workflow changes, external harness bootstrap path changes, or dependency bootstrap behavior changes. |
 | `agents/spec_loader.py` | Loads agent YAML, resolves skills text, renders prompt, and returns allowed tools. | Agent spec schema, prompt templating, or skill resolution behavior changes. |
 | `skills/loader.py` | Loads `SKILL.md` files and extracts `Allowed Tools` declarations. | Skill format parsing changes or tool-allowlist extraction rules change. |
 | `runtime/__init__.py` | Empty package marker for the runtime module. | Only if adding runtime package-level exports or init-time behavior. |
@@ -112,7 +129,7 @@ flowchart TD
 | `benchmarks/__init__.py` | Empty package marker for benchmark adapters/evaluators. | Only if adding benchmark package-level exports or init-time behavior. |
 | `benchmarks/base_evaluator.py` | Shared harness execution flow and canonical report/log relocation hooks. | Common evaluator orchestration or relocation behavior changes. |
 | `benchmarks/contracts.py` | Protocol contracts for benchmark adapters and evaluators consumed by runtime services. | Adapter/evaluator method signatures or shared contract expectations change. |
-| `benchmarks/discovery.py` | Auto-discovers adapter classes from `benchmarks/*/adapter.py` modules. | Discovery conventions, adapter validation rules, or import strategy changes. |
+| `benchmarks/discovery.py` | Auto-discovers adapter classes from `benchmarks/*/adapter.py` modules (not `external/*`). | Discovery conventions, adapter validation rules, or import strategy changes. |
 | `benchmarks/registry.py` | Runtime adapter registry with optional overrides and deterministic lookup errors. | Registration override policy or benchmark lookup/list behavior changes. |
 | `benchmarks/swebench_verified/__init__.py` | Empty package marker for SWE-bench verified integration module. | Only if adding module-level exports or init-time behavior. |
 | `benchmarks/swebench_verified/adapter.py` | Loads SWE-bench tasks (HF/local), maps rows to `BenchmarkTask`, serializes prediction JSONL rows. | Dataset ingestion, task mapping, workspace resolution, or prediction schema mapping changes. |
@@ -135,7 +152,9 @@ flowchart TD
 1. Add `benchmarks/<name>/adapter.py` that satisfies `benchmarks/contracts.py`.
 2. Add `benchmarks/<name>/evaluator.py` (or reuse `benchmarks/base_evaluator.py` pattern).
 3. Confirm auto-discovery via `benchmarks/discovery.py` and selection via `benchmarks/registry.py`.
-4. Keep orchestration generic by plugging the adapter into existing `runtime/run_service.py` and `runtime/eval_service.py`.
+4. If evaluation needs a third-party harness or assets, place them under `external/<project>/` and set `evaluation.eval_root` in run config.
+5. If loading local tasks/repos, set `benchmark.data_root` to that root (under `external/` or any other local path).
+6. Keep orchestration generic by plugging the adapter into existing `runtime/run_service.py` and `runtime/eval_service.py`.
 
 ### Tune runtime/tool behavior
 1. Change loop budgets/termination in `runtime/agent_runtime.py`.
