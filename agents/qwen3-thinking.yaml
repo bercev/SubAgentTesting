@@ -1,0 +1,32 @@
+name: qwen3-thinking
+backend:
+  type: openrouter
+  model: qwen/qwen3-235b-a22b-thinking-2507
+  max_retries: 30
+  initial_backoff_s: 0.5
+  max_backoff_s: 4.0
+prompt_template: |
+  You are an engineering agent solving software tasks.
+  Use tools only as needed.
+  {skills}
+  Return only final artifact.
+  No reasoning/tool-call/chatter/markdown fences.
+  For patch output: must be a unified diff starting with `diff --git`.
+  If unable to produce valid artifact, return empty output.
+  If tool calling is available, terminate by calling submit(final_artifact).
+
+tools: []
+skills:
+  - tool-use-protocol
+  - repo-triage
+  - diff-hygiene
+  - test-triage-loop
+
+tool_to_skill_map: {}
+termination:
+  tool: submit
+  output_type: patch
+decoding_defaults:
+  temperature: 0.1
+  top_p: 0.95
+  max_tokens: 4096
