@@ -40,8 +40,10 @@ tests/test_benchmark_discovery.py
 tests/test_cli_artifact_enforcement.py
 tests/test_cli_eval_summary.py
 tests/test_config_loader_models.py
+tests/test_manifest_store_strictness.py
 tests/test_model_backend_retry.py
 tests/test_skills_loader.py
 tests/test_spec_loader.py
+tests/test_swebench_adapter_strictness.py
 tests/test_swebench_evaluator_report_path.py
 tests/test_tool_extractor.py
