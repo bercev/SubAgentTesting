@@ -1,11 +1,11 @@
-name: minimax2.1
+name: qwen3-coder-30b-a3b-instruct
 backend:
   type: openrouter
-  model: minimax/minimax-m2.1
-  max_retries: 10
+  model: qwen/qwen3-coder-30b-a3b-instruct
+  max_retries: 30
   initial_backoff_s: 0.5
   max_backoff_s: 4.0
-prompt_file: ../prompts/engineering_agent_v2.txt
+prompt_file: ../prompts/engineering_agent_v1.txt
 
 tools: []
 skills:

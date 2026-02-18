@@ -13,7 +13,7 @@ evaluation:
 runtime:
   mode: patch_only
   selector: 2
-  max_tool_calls: 20
+  max_tool_calls: 50
   max_wall_time_s: 600
 
 output:

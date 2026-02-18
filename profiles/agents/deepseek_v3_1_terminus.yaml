@@ -1,8 +1,8 @@
-name: minimax2.1
+name: deepseek-v3.1-terminus
 backend:
   type: openrouter
-  model: minimax/minimax-m2.1
-  max_retries: 10
+  model: deepseek/deepseek-v3.1-terminus
+  max_retries: 30
   initial_backoff_s: 0.5
   max_backoff_s: 4.0
 prompt_file: ../prompts/engineering_agent_v2.txt
