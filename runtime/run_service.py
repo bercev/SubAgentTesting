@@ -14,6 +14,13 @@ from runtime.config_loader import apply_run_overrides
 from runtime.config_models import RunConfig
 from runtime.manifest_store import append_log, manifest_path, new_run_id, now_iso, write_manifest
 from runtime.metrics import zero_eval_metrics
+from runtime.tool_quality import (
+    build_run_summary,
+    build_task_summary,
+    format_run_tool_quality_log,
+    format_task_tool_quality_log,
+    serialize_tool_call_row,
+)
 from runtime.tools import ToolContext, ToolRegistry
 
 
@@ -44,6 +51,15 @@ def _filter_tool_schemas(registry: ToolRegistry, allowed: set[str]) -> list[dict
         if name in allowed:
             schemas.append(schema)
     return schemas
+
+
+def _preview_text_for_log(text: str, limit: int = 400) -> str:
+    """Normalize and truncate multi-line text for compact run-log diagnostics."""
+
+    compact = " ".join((text or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[:limit] + "...[truncated]"
 
 
 def execute_run(
@@ -85,6 +101,7 @@ def execute_run(
     run_root = artifacts_dir / run_id
     out_path = run_root / "predictions.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    telemetry_path = run_root / "tool_telemetry.jsonl"
     run_log_path = run_root / "run.log"
     append_log(
         run_log_path,
@@ -102,12 +119,27 @@ def execute_run(
 
     valid_artifacts = 0
     invalid_artifacts = 0
+    tool_quality_weights = effective_config.runtime.tool_quality_weights.model_dump(mode="python")
+    tool_quality_enabled = effective_config.runtime.tool_quality_enabled
+    task_tool_summaries: list[Dict[str, Any]] = []
+    termination_tool = "submit"
+    if isinstance(spec.termination, dict):
+        raw_termination_tool = spec.termination.get("tool")
+        if isinstance(raw_termination_tool, str) and raw_termination_tool.strip():
+            termination_tool = raw_termination_tool.strip()
 
-    with out_path.open("w", encoding="utf-8") as out_file:
+    with out_path.open("w", encoding="utf-8") as out_file, telemetry_path.open(
+        "w",
+        encoding="utf-8",
+    ) as telemetry_file:
         for task in tasks:
             # Rebuild tooling/runtime per task so workspace context stays isolated.
             workspace_root = adapter.workspace_root_for_task(task)
             submitted_artifact: Dict[str, str] = {}
+            append_log(
+                run_log_path,
+                f"task={task.task_id} task_start workspace_root={workspace_root}",
+            )
 
             def _submit_callback(artifact: str):
                 submitted_artifact["artifact"] = artifact
@@ -115,7 +147,22 @@ def execute_run(
             tool_ctx = ToolContext(workspace_root=workspace_root, submit_callback=_submit_callback)
             tool_registry = ToolRegistry(tool_ctx)
 
-            backend = build_backend(spec.backend)
+            def _api_log(line: str, task_id: str = task.task_id) -> None:
+                event_name = line.split(" ", 1)[0] if line else ""
+                if event_name == "api_error":
+                    level = "ERROR"
+                elif event_name in {"api_retry", "api_tool_args_parse_error"}:
+                    level = "WARNING"
+                else:
+                    level = "INFO"
+                append_log(
+                    run_log_path,
+                    f"task={task_id} {line}",
+                    level=level,
+                    source="model_backend.py",
+                )
+
+            backend = build_backend(spec.backend, event_logger=_api_log)
             if mode_name == "patch_only":
                 allowed = {"submit"}
                 tool_schemas = None
@@ -131,6 +178,8 @@ def execute_run(
                 allowed_tools=allowed,
                 max_tool_calls=effective_config.runtime.max_tool_calls,
                 max_wall_time_s=effective_config.runtime.max_wall_time_s,
+                termination_tool=termination_tool,
+                mode_name=mode_name,
             )
 
             result = runtime.run(
@@ -148,6 +197,14 @@ def execute_run(
             # Patch output remains pass-through; non-patch outputs use normalized artifact.
             if task.expected_output_type != "patch":
                 artifact = policy_result.artifact
+            append_log(
+                run_log_path,
+                (
+                    f"task={task.task_id} artifact_bytes={len(artifact.encode('utf-8', errors='ignore'))} "
+                    f"artifact_preview={_preview_text_for_log(artifact)}"
+                ),
+                level="INFO" if policy_result.valid else "WARNING",
+            )
 
             if policy_result.valid:
                 valid_artifacts += 1
@@ -175,6 +232,46 @@ def execute_run(
             if verbose:
                 print(per_task_line)
 
+            runtime_tool_payload = (
+                result.metadata.get("tool_quality_runtime")
+                if result.metadata and isinstance(result.metadata.get("tool_quality_runtime"), dict)
+                else None
+            )
+            if isinstance(runtime_tool_payload, dict):
+                raw_events = runtime_tool_payload.get("events")
+                if isinstance(raw_events, list):
+                    for event in raw_events:
+                        if not isinstance(event, dict):
+                            continue
+                        row = serialize_tool_call_row(
+                            run_id=run_id,
+                            task_id=task.task_id,
+                            mode=mode_name,
+                            event=event,
+                        )
+                        telemetry_file.write(json.dumps(row) + "\n")
+
+            task_summary = build_task_summary(
+                run_id=run_id,
+                task_id=task.task_id,
+                mode=mode_name,
+                runtime_payload=runtime_tool_payload,
+                weights=tool_quality_weights,
+                enabled=tool_quality_enabled,
+            )
+            task_tool_summaries.append(task_summary)
+            telemetry_file.write(json.dumps(task_summary) + "\n")
+            telemetry_file.flush()
+            append_log(run_log_path, format_task_tool_quality_log(task_summary))
+
+    run_tool_quality_summary = build_run_summary(
+        telemetry_path=telemetry_path,
+        task_summaries=task_tool_summaries,
+        weights=tool_quality_weights,
+        enabled=tool_quality_enabled,
+    )
+    append_log(run_log_path, format_run_tool_quality_log(run_tool_quality_summary))
+
     created_at = now_iso()
     manifest_payload: Dict[str, Any] = {
         "run_id": run_id,
@@ -188,6 +285,7 @@ def execute_run(
         "split": split_name,
         "mode": mode_name,
         "predictions_path": str(out_path.resolve()),
+        "tool_quality": run_tool_quality_summary,
         "evaluation": {
             "status": "not_run",
             "returncode": None,
@@ -204,7 +302,7 @@ def execute_run(
         f"Run summary: run_id={run_id} tasks={len(tasks)} "
         f"valid_artifacts={valid_artifacts} invalid_artifacts={invalid_artifacts}"
     )
-    append_log(run_log_path, run_summary_line)
+    append_log(run_log_path, run_summary_line, level="INFO" if invalid_artifacts == 0 else "WARNING")
     append_log(run_log_path, f"Predictions written to {out_path}")
     append_log(run_log_path, f"Manifest written to {out_manifest_path}")
     append_log(run_log_path, f"Run log written to {run_log_path}")

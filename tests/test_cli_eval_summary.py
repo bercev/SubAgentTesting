@@ -209,6 +209,82 @@ def test_execute_eval_zero_metrics_malformed_report(monkeypatch, tmp_path: Path)
     assert outcome.metrics["accuracy_resolved_submitted"] == 0.0
 
 
+def test_execute_eval_preserves_existing_tool_quality_manifest_block(monkeypatch, tmp_path: Path):
+    artifacts_dir = tmp_path / "artifacts"
+    run_id = "2026-02-13_010203"
+    run_root = artifacts_dir / run_id
+    predictions_path = run_root / "predictions.jsonl"
+    report_path = run_root / "report.json"
+    harness_log_root = run_root / "evaluation"
+    manifest_path = run_root / "manifest.json"
+
+    _write_predictions(predictions_path)
+    harness_log_root.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(
+        json.dumps(
+            {
+                "total_instances": 500,
+                "submitted_instances": 1,
+                "completed_instances": 1,
+                "resolved_instances": 0,
+                "unresolved_instances": 1,
+                "empty_patch_instances": 0,
+                "error_instances": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    existing_tool_quality = {
+        "version": "v1",
+        "applicable": False,
+        "score": None,
+        "weights": {
+            "execution_quality": 0.45,
+            "policy_quality": 0.25,
+            "termination_quality": 0.20,
+            "budget_quality": 0.10,
+        },
+        "components": {
+            "execution_quality": None,
+            "policy_quality": None,
+            "termination_quality": None,
+            "budget_quality": None,
+        },
+        "counts": {
+            "tool_calls_total": 0,
+            "tool_calls_success": 0,
+            "tool_calls_failed": 0,
+            "tool_calls_denied": 0,
+            "tasks_total": 1,
+            "tasks_applicable": 0,
+            "tasks_budget_exhausted": 0,
+            "tasks_termination_ack": 0,
+        },
+        "telemetry_path": str((run_root / "tool_telemetry.jsonl").resolve()),
+    }
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "tool_quality": existing_tool_quality,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evaluator = _FakeEvaluator(report_path=report_path, harness_log_root=harness_log_root)
+    cfg = _run_config(artifacts_dir, evaluator)
+    monkeypatch.setattr(eval_service, "BenchmarkRegistry", lambda: _FakeRegistry())
+
+    outcome = eval_service.execute_eval(
+        predictions_path=predictions_path,
+        config=cfg,
+        benchmark=None,
+    )
+    payload = json.loads(outcome.manifest_path.read_text(encoding="utf-8"))
+    assert payload["tool_quality"] == existing_tool_quality
+
+
 def test_cli_eval_verbose_default_prints_harness_output(monkeypatch, tmp_path: Path, capsys):
     artifacts_dir = tmp_path / "artifacts"
     run_id = "2026-02-13_010203"

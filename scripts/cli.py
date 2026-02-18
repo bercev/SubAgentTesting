@@ -15,13 +15,33 @@ from runtime.run_service import execute_run
 app = typer.Typer(add_completion=False)
 load_dotenv()
 
+PROFILES_ROOT = Path("profiles")
+AGENT_PROFILES_DIR = PROFILES_ROOT / "agents"
+RUN_CONFIGS_DIR = PROFILES_ROOT / "runs"
+
+
+def _resolve_profile_path(raw_path: str, preferred_dir: Path) -> Path:
+    """Resolve profile/config paths against the current profiles directory layout."""
+
+    candidate = Path(raw_path)
+    if candidate.exists():
+        return candidate
+
+    # Support passing only a filename.
+    if str(candidate.parent) in {"", "."}:
+        preferred = preferred_dir / candidate.name
+        if preferred.exists():
+            return preferred
+
+    return candidate
+
 
 @app.command()
 def list():
     """List available agents, benchmarks, and run configs."""
-    agents = [path.name for path in Path("agents").glob("*.yaml")]
+    agents = [path.name for path in AGENT_PROFILES_DIR.glob("*.yaml")]
     benchmarks = BenchmarkRegistry().list_benchmarks()
-    run_configs = [path.name for path in Path("configs/runs").glob("*.yaml")]
+    run_configs = [path.name for path in RUN_CONFIGS_DIR.glob("*.yaml")]
     print(f"Agents: {', '.join(sorted(agents))}" if agents else "Agents: (none)")
     print(f"Benchmarks: {', '.join(sorted(benchmarks))}" if benchmarks else "Benchmarks: (none)")
     print(f"Run configs: {', '.join(sorted(run_configs))}" if run_configs else "Run configs: (none)")
@@ -29,12 +49,12 @@ def list():
 
 @app.command()
 def run(
-    agent: str = typer.Option("agents/qwen2_5_coder.yaml", help="Agent profile path"),
+    agent: str = typer.Option("profiles/agents/qwen2_5_coder.yaml", help="Agent profile path"),
     benchmark: Optional[str] = typer.Option(None, help="Benchmark override"),
     split: Optional[str] = typer.Option(None, help="Split override"),
     selector: Optional[int] = typer.Option(None, help="Number of tasks override"),
     mode: Optional[str] = typer.Option(None, help="Mode override: patch_only or tools_enabled"),
-    run_config: str = typer.Option("configs/runs/default.yaml", help="Run config path"),
+    run_config: str = typer.Option("profiles/runs/default.yaml", help="Run config path"),
     verbose: bool = typer.Option(
         False,
         "--verbose/--quiet",
@@ -43,9 +63,11 @@ def run(
 ):
     """Generate predictions for selected benchmark tasks."""
 
-    config = load_run_config(Path(run_config))
+    resolved_agent = _resolve_profile_path(agent, AGENT_PROFILES_DIR)
+    resolved_run_config = _resolve_profile_path(run_config, RUN_CONFIGS_DIR)
+    config = load_run_config(resolved_run_config)
     outcome = execute_run(
-        agent_path=agent,
+        agent_path=str(resolved_agent),
         config=config,
         benchmark=benchmark,
         split=split,
@@ -75,10 +97,10 @@ def run(
 
 @app.command()
 def predict(
-    agent: str = typer.Option("agents/qwen2_5_coder.yaml"),
+    agent: str = typer.Option("profiles/agents/qwen2_5_coder.yaml"),
     split: Optional[str] = typer.Option(None),
     selector: Optional[int] = typer.Option(1),
-    run_config: str = typer.Option("configs/runs/default.yaml"),
+    run_config: str = typer.Option("profiles/runs/default.yaml"),
     verbose: bool = typer.Option(
         False,
         "--verbose/--quiet",
@@ -101,7 +123,7 @@ def predict(
 @app.command()
 def eval(
     predictions: str = typer.Argument("artifacts/<run_id>/predictions.jsonl"),
-    run_config: str = typer.Option("configs/runs/default.yaml"),
+    run_config: str = typer.Option("profiles/runs/default.yaml"),
     benchmark: Optional[str] = typer.Option(None, help="Benchmark override"),
     verbose: bool = typer.Option(
         True,
@@ -111,7 +133,8 @@ def eval(
 ):
     """Evaluate a canonical predictions file with benchmark harness."""
 
-    config = load_run_config(Path(run_config))
+    resolved_run_config = _resolve_profile_path(run_config, RUN_CONFIGS_DIR)
+    config = load_run_config(resolved_run_config)
     predictions_path = Path(predictions)
 
     try:

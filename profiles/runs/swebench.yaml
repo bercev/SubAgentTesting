@@ -12,7 +12,7 @@ evaluation:
 
 runtime:
   mode: patch_only
-  selector: 5
+  selector: 2
   max_tool_calls: 20
   max_wall_time_s: 600
 

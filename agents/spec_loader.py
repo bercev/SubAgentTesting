@@ -35,10 +35,11 @@ class AgentSpecLoader:
 
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
+        prompt_template = self._resolve_prompt_template(data, path)
         spec = AgentSpec(
             name=data["name"],
             backend=data["backend"],
-            prompt_template=data["prompt_template"],
+            prompt_template=prompt_template,
             tools=data.get("tools", []),
             skills=data.get("skills", []),
             tool_to_skill_map=data.get("tool_to_skill_map", {}),
@@ -57,6 +58,41 @@ class AgentSpecLoader:
         # Simple placeholder replacement
         base = base.replace("{skills}", skills_text)
         return base
+
+    def _resolve_prompt_template(self, data: Dict[str, Any], agent_path: Path) -> str:
+        """Resolve prompt text from inline template or external prompt file."""
+
+        prompt_template = data.get("prompt_template")
+        prompt_file = data.get("prompt_file")
+
+        if prompt_template is not None and prompt_file is not None:
+            raise ValueError("Agent spec must define only one of `prompt_template` or `prompt_file`")
+
+        if prompt_file is not None:
+            if not isinstance(prompt_file, str) or not prompt_file.strip():
+                raise ValueError("`prompt_file` must be a non-empty string path")
+            prompt_path = self._resolve_prompt_path(prompt_file.strip(), agent_path)
+            if not prompt_path.exists():
+                raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
+            return prompt_path.read_text(encoding="utf-8")
+
+        if prompt_template is None:
+            raise ValueError("Missing required prompt definition: set `prompt_template` or `prompt_file`")
+        if not isinstance(prompt_template, str):
+            raise ValueError("`prompt_template` must be a string")
+        return prompt_template
+
+    def _resolve_prompt_path(self, prompt_file: str, agent_path: Path) -> Path:
+        """Resolve prompt-file path relative to agent file first, then repo base."""
+
+        raw = Path(prompt_file)
+        if raw.is_absolute():
+            return raw
+
+        candidate_agent_dir = agent_path.parent / raw
+        if candidate_agent_dir.exists():
+            return candidate_agent_dir
+        return self.base_dir / raw
 
 
 def build_allowed_tools_from_skills(skill_names: List[str], base_dir: Path) -> Set[str]:

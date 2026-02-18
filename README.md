@@ -2,8 +2,9 @@
 
 End-to-end pipeline for benchmarking code-editing agents on SWE-bench: it bootstraps the environment, composes an agent profile with a run config, runs the agent to generate patches, and evaluates them with the SWE-bench harness while saving outputs in a portable layout.
 
-- Agent behavior comes from `agents/*.yaml` (model/backend, prompts, skills).
-- Execution policy and dataset wiring come from `configs/runs/*.yaml`.
+- Agent behavior comes from `profiles/agents/*.yaml` (model/backend, prompts, skills).
+- Prompt text files live in `profiles/prompts/*.txt`.
+- Execution policy and dataset wiring come from `profiles/runs/*.yaml`.
 - `agent run` produces prediction JSONL files; `agent eval` scores them and stores run artifacts under `artifacts/<run_id>/`.
 
 ## Quick Start
@@ -36,11 +37,11 @@ OPENROUTER_API_KEY=your_key_here
 
 ### 3) Choose run config + agent profile
 
-- Run configs: `configs/runs/*.yaml`
-- Agent profiles: `agents/*.yaml`
+- Run configs: `profiles/runs/*.yaml`
+- Agent profiles: `profiles/agents/*.yaml`
 
 Default run config:
-- `configs/runs/default.yaml`
+- `profiles/runs/default.yaml`
 
 ### 4) Run a quick example (from project root)
 
@@ -54,8 +55,8 @@ Run one quick prediction job:
 
 ```bash
 agent run \
-  --agent agents/openrouter_free.yaml \
-  --run-config configs/runs/openrouter_free_swebench.yaml \
+  --agent profiles/agents/openrouter_free.yaml \
+  --run-config profiles/runs/swebench.yaml \
   --mode patch_only \
   --selector 10
 ```
@@ -72,19 +73,19 @@ Evaluate it:
 ```bash
 agent eval \
   "$PRED_PATH" \
-  --run-config configs/runs/openrouter_free_swebench.yaml
+  --run-config profiles/runs/swebench.yaml
 ```
 
 ## Config Model
 
-### Agent profile (`agents/*.yaml`)
+### Agent profile (`profiles/agents/*.yaml`)
 Defines model behavior:
 - backend type + model id
-- prompt template
+- prompt file/template
 - skills and tool policy
 - decoding defaults
 
-### Run config (`configs/runs/*.yaml`)
+### Run config (`profiles/runs/*.yaml`)
 Defines operational environment:
 - benchmark source and split
 - evaluation command and paths
@@ -94,15 +95,15 @@ Defines operational environment:
 ### How they work together
 
 `agent run` composes both files for each run:
-- `agents/*.yaml` controls the model/backend and agent behavior.
-- `configs/runs/*.yaml` controls what benchmark to run, how to evaluate, and where to write outputs.
+- `profiles/agents/*.yaml` controls the model/backend and agent behavior.
+- `profiles/runs/*.yaml` controls what benchmark to run, how to evaluate, and where to write outputs.
 - CLI flags (like `--mode`, `--split`, `--selector`, `--benchmark`) override values from run config for that invocation.
 
 TLDR:
-- `agents/*.yaml` = "how the assistant thinks and responds"
-- `configs/runs/*.yaml` = "what task environment and runtime policy to execute"
+- `profiles/agents/*.yaml` = "how the assistant thinks and responds"
+- `profiles/runs/*.yaml` = "what task environment and runtime policy to execute"
 
-Example (`configs/runs/example.swebench_verified.hf.yaml`):
+Example (`profiles/runs/example.swebench_verified.hf.yaml`):
 
 ```yaml
 benchmark:
@@ -161,8 +162,8 @@ Generate predictions (`patch_only`):
 
 ```bash
 agent run \
-  --agent agents/openrouter_free.yaml \
-  --run-config configs/runs/default.yaml \
+  --agent profiles/agents/openrouter_free.yaml \
+  --run-config profiles/runs/default.yaml \
   --mode patch_only \
   --selector 10 \
   --split test
@@ -172,8 +173,8 @@ Generate predictions (`tools_enabled`):
 
 ```bash
 agent run \
-  --agent agents/openrouter_free.yaml \
-  --run-config configs/runs/default.yaml \
+  --agent profiles/agents/openrouter_free.yaml \
+  --run-config profiles/runs/default.yaml \
   --mode tools_enabled \
   --selector 10 \
   --split test
@@ -184,7 +185,7 @@ Evaluate predictions:
 ```bash
 agent eval \
   artifacts/<run_id>/predictions.jsonl \
-  --run-config configs/runs/default.yaml
+  --run-config profiles/runs/default.yaml
 ```
 
 ## Outputs
@@ -227,8 +228,8 @@ Patch outputs are pass-through: `model_patch` keeps raw model output even when p
 Quiet mode examples:
 
 ```bash
-agent run --quiet --agent agents/openrouter_free.yaml --run-config configs/runs/default.yaml --mode patch_only --selector 10
-agent eval --quiet artifacts/<run_id>/predictions.jsonl --run-config configs/runs/default.yaml
+agent run --quiet --agent profiles/agents/openrouter_free.yaml --run-config profiles/runs/default.yaml --mode patch_only --selector 10
+agent eval --quiet artifacts/<run_id>/predictions.jsonl --run-config profiles/runs/default.yaml
 ```
 
 ## Accuracy Summary
@@ -247,8 +248,8 @@ artifacts/<run_id>/manifest.json -> evaluation.metrics
 ## Portability
 
 Swap providers/models/datasets without code changes:
-1. pick an agent profile in `agents/`
-2. pick a run config in `configs/runs/`
+1. pick an agent profile in `profiles/agents/`
+2. pick a run config in `profiles/runs/`
 3. run `agent run` with optional CLI overrides
 
 ## Add A New Benchmark
@@ -326,7 +327,7 @@ Best default is subclassing `benchmarks/base_evaluator.py` and overriding `build
 
 ### Step 4: Add run config
 
-Add `configs/runs/<name>.yaml`:
+Add `profiles/runs/<name>.yaml`:
 
 ```yaml
 benchmark:
@@ -365,8 +366,8 @@ Confirm `my_benchmark` appears under Benchmarks, then run a 1-task smoke test:
 
 ```bash
 agent run \
-  --agent agents/openrouter_free.yaml \
-  --run-config configs/runs/<name>.yaml \
+  --agent profiles/agents/openrouter_free.yaml \
+  --run-config profiles/runs/<name>.yaml \
   --selector 1 \
   --mode patch_only
 ```
@@ -374,7 +375,7 @@ agent run \
 If evaluator is implemented, run:
 
 ```bash
-agent eval artifacts/<run_id>/predictions.jsonl --run-config configs/runs/<name>.yaml
+agent eval artifacts/<run_id>/predictions.jsonl --run-config profiles/runs/<name>.yaml
 ```
 
 ### Step 6: Add tests for the new benchmark
@@ -386,15 +387,14 @@ Recommended:
 
 ## Presets
 
-- `configs/runs/default.yaml`
-- `configs/runs/example.swebench_verified.hf.yaml`
-- `configs/runs/openrouter_free_swebench.yaml`
-- `configs/runs/local_jsonl_swebench.yaml`
-- `configs/runs/qwen3_coder_free_swebench.yaml`
+- `profiles/runs/default.yaml`
+- `profiles/runs/example.swebench_verified.hf.yaml`
+- `profiles/runs/swebench.yaml`
+- `profiles/runs/swebench_smoke_local.yaml`
 
 Agent presets include:
-- `agents/openrouter_free.yaml`
-- `agents/qwen3_coder_free.yaml`
+- `profiles/agents/openrouter_free.yaml`
+- `profiles/agents/qwen3_coder_free.yaml`
 
 ## Tests
 
@@ -416,22 +416,22 @@ pytest
 
 | Argument | Type | Default | Default On? | Description |
 |---|---|---|---|---|
-| `--agent` | `str` | `agents/qwen2_5_coder.yaml` | Yes | Agent profile YAML path. |
+| `--agent` | `str` | `profiles/agents/qwen2_5_coder.yaml` | Yes | Agent profile YAML path. |
 | `--benchmark` | `str \| null` | `null` | No | Override benchmark name from run config. |
 | `--split` | `str \| null` | `null` | No | Override dataset split from run config. |
 | `--selector` | `int \| null` | `null` | No | Override number of tasks. |
 | `--mode` | `str \| null` | `null` | No | Override runtime mode (`patch_only` or `tools_enabled`). |
-| `--run-config` | `str` | `configs/runs/default.yaml` | Yes | Run config YAML path. |
+| `--run-config` | `str` | `profiles/runs/default.yaml` | Yes | Run config YAML path. |
 | `--verbose / --quiet` | flag | `--quiet` | `--quiet` | Terminal verbosity for per-task lines. Run logs are still written to file. |
 
 #### `agent predict`
 
 | Argument | Type | Default | Default On? | Description |
 |---|---|---|---|---|
-| `--agent` | `str` | `agents/qwen2_5_coder.yaml` | Yes | Agent profile YAML path. |
+| `--agent` | `str` | `profiles/agents/qwen2_5_coder.yaml` | Yes | Agent profile YAML path. |
 | `--split` | `str \| null` | `null` | No | Override dataset split. |
 | `--selector` | `int \| null` | `1` | Yes | Number of tasks to run. |
-| `--run-config` | `str` | `configs/runs/default.yaml` | Yes | Run config YAML path. |
+| `--run-config` | `str` | `profiles/runs/default.yaml` | Yes | Run config YAML path. |
 | `--verbose / --quiet` | flag | `--quiet` | `--quiet` | Terminal verbosity for per-task lines. |
 
 Notes:
@@ -442,13 +442,13 @@ Notes:
 | Argument | Type | Default | Default On? | Description |
 |---|---|---|---|---|
 | `predictions` (positional) | `str` | `artifacts/<run_id>/predictions.jsonl` | Yes | Predictions file to evaluate. Must follow canonical run layout. |
-| `--run-config` | `str` | `configs/runs/default.yaml` | Yes | Run config YAML path. |
+| `--run-config` | `str` | `profiles/runs/default.yaml` | Yes | Run config YAML path. |
 | `--benchmark` | `str \| null` | `null` | No | Optional benchmark override. |
 | `--verbose / --quiet` | flag | `--verbose` | `--verbose` | Harness output verbosity in terminal. |
 
 ### YAML Configuration Schema
 
-#### Run Config Schema (`configs/runs/*.yaml`)
+#### Run Config Schema (`profiles/runs/*.yaml`)
 
 | Key | Type | Default | Required | Description |
 |---|---|---|---|---|
@@ -468,7 +468,7 @@ Notes:
 | `runtime.max_wall_time_s` | `int` | `600` | No | Per-task wall-time budget in seconds. |
 | `output.artifacts_dir` | `str` | `artifacts` | No | Root directory for run artifacts. |
 
-#### Agent Profile Schema (`agents/*.yaml`)
+#### Agent Profile Schema (`profiles/agents/*.yaml`)
 
 | Key | Type | Default | Required | Description |
 |---|---|---|---|---|
@@ -480,7 +480,8 @@ Notes:
 | `backend.max_retries` | `int` | `8` | No | Request retry attempts for transient backend errors. |
 | `backend.initial_backoff_s` | `float` | `1.0` | No | Initial exponential backoff delay. |
 | `backend.max_backoff_s` | `float` | `10.0` | No | Max retry backoff delay. |
-| `prompt_template` | `str` | none | Yes | System prompt template (`{skills}` placeholder supported). |
+| `prompt_template` | `str` | none | Conditionally | Inline system prompt template (`{skills}` placeholder supported). Use when `prompt_file` is not set. |
+| `prompt_file` | `str` | none | Conditionally | Path to system prompt text file. Use when `prompt_template` is not set. |
 | `tools` | `list[dict]` | `[]` | No | Reserved for agent/tool policy metadata. |
 | `skills` | `list[str]` | `[]` | No | Skill folder names loaded from `skills/<name>/SKILL.md`. |
 | `tool_to_skill_map` | `dict[str, list[str]]` | `{}` | No | Optional tool-to-skill mapping metadata. |
@@ -489,21 +490,20 @@ Notes:
 
 ### Included YAML Presets
 
-#### Run Config Presets (`configs/runs/*.yaml`)
+#### Run Config Presets (`profiles/runs/*.yaml`)
 
 | File | Benchmark | Data Source | Mode | Selector | Purpose |
 |---|---|---|---|---|---|
-| `configs/runs/default.yaml` | `swebench_verified` | `hf` | `patch_only` | `10` | General default SWE-bench run. |
-| `configs/runs/example.swebench_verified.hf.yaml` | `swebench_verified` | `hf` | `patch_only` | `10` | Schema example showing `benchmark.params` and `evaluation.params`. |
-| `configs/runs/local_jsonl_swebench.yaml` | `swebench_verified` | `local` | `patch_only` | `5` | Local JSONL task loading template. |
-| `configs/runs/openrouter_free_swebench.yaml` | `swebench_verified` | `hf` | `patch_only` | `5` | Default run settings paired with `openrouter_free` agent. |
-| `configs/runs/qwen3_coder_free_swebench.yaml` | `swebench_verified` | `hf` | `patch_only` | `10` | Default run settings paired with Qwen3 coder agent. |
+| `profiles/runs/default.yaml` | `swebench_verified` | `hf` | `patch_only` | `10` | General default SWE-bench run. |
+| `profiles/runs/example.swebench_verified.hf.yaml` | `swebench_verified` | `hf` | `patch_only` | `10` | Schema example showing `benchmark.params` and `evaluation.params`. |
+| `profiles/runs/swebench.yaml` | `swebench_verified` | `hf` | `patch_only` | `2` | Small SWE-bench run profile for quick validation. |
+| `profiles/runs/swebench_smoke_local.yaml` | `swebench_verified` | `local` | `patch_only` | `5` | Local smoke-test profile using `data/swebench_smoke`. |
 
-#### Agent Presets (`agents/*.yaml`)
+#### Agent Presets (`profiles/agents/*.yaml`)
 
 | File | `name` | Model | Retry/Backoff Overrides | Purpose |
 |---|---|---|---|---|
-| `agents/openrouter_free.yaml` | `openrouter-free` | `openrouter/free` | `max_retries=30`, `initial_backoff_s=0.5`, `max_backoff_s=4.0` | Dynamic free-model routing profile. |
-| `agents/qwen2_5_coder.yaml` | `qwen2.5-coder-0.5b` | `qwen2.5-coder-0.5b-instruct` | backend defaults | Small Qwen coder profile. |
-| `agents/qwen3_coder_free.yaml` | `qwen3-coder-free` | `qwen/qwen3-coder:free` | backend defaults | Qwen3 coder free profile. |
-| `agents/qwen3_next_80b_free.yaml` | `qwen3-next-80b-a3b-instruct-free` | `qwen/qwen3-next-80b-a3b-instruct:free` | backend defaults | Larger Qwen3 Next profile. |
+| `profiles/agents/openrouter_free.yaml` | `openrouter-free` | `openrouter/free` | `max_retries=30`, `initial_backoff_s=0.5`, `max_backoff_s=4.0` | Dynamic free-model routing profile. |
+| `profiles/agents/qwen2_5_coder.yaml` | `qwen2.5-coder-0.5b` | `qwen2.5-coder-0.5b-instruct` | backend defaults | Small Qwen coder profile. |
+| `profiles/agents/qwen3_coder_free.yaml` | `qwen3-coder-free` | `qwen/qwen3-coder:free` | backend defaults | Qwen3 coder free profile. |
+| `profiles/agents/qwen3_next_80b_free.yaml` | `qwen3-next-80b-a3b-instruct-free` | `qwen/qwen3-next-80b-a3b-instruct:free` | backend defaults | Larger Qwen3 Next profile. |

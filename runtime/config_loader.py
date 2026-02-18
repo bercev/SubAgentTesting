@@ -32,6 +32,13 @@ def default_run_config_dict() -> Dict[str, Any]:
             "selector": 5,
             "max_tool_calls": 20,
             "max_wall_time_s": 600,
+            "tool_quality_enabled": True,
+            "tool_quality_weights": {
+                "execution_quality": 0.45,
+                "policy_quality": 0.25,
+                "termination_quality": 0.20,
+                "budget_quality": 0.10,
+            },
         },
         "output": {
             "artifacts_dir": "artifacts",
@@ -52,7 +59,7 @@ def _deep_merge(base: Dict[str, Any], override: Dict[str, Any]) -> Dict[str, Any
 
 
 def _validate_mode(mode_value: str) -> Literal["patch_only", "tools_enabled"]:
-    """Enforce strict mode values with no legacy alias conversions."""
+    """Enforce strict mode values with no alias conversions."""
 
     if mode_value in {"patch_only", "tools_enabled"}:
         return mode_value
@@ -92,7 +99,7 @@ def load_run_config(run_config_path: Path) -> RunConfig:
     if not run_config_path.exists():
         raise FileNotFoundError(
             "Missing run config: "
-            f"{run_config_path}. Create one from `configs/runs/example.swebench_verified.hf.yaml`."
+            f"{run_config_path}. Create one from `profiles/runs/example.swebench_verified.hf.yaml`."
         )
     with run_config_path.open("r", encoding="utf-8") as config_file:
         raw_config = yaml.safe_load(config_file) or {}

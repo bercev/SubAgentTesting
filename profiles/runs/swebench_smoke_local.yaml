@@ -1,0 +1,20 @@
+benchmark:
+  name: swebench_verified
+  dataset_name: SWE-bench/SWE-bench_Verified
+  split: test
+  data_source: local
+  data_root: ./data/swebench_smoke
+
+evaluation:
+  harness_cmd: python -m swebench.harness.run_evaluation
+  eval_root: ./external/SWE-bench
+  workdir: .
+
+runtime:
+  mode: patch_only
+  selector: 5
+  max_tool_calls: 20
+  max_wall_time_s: 600
+
+output:
+  artifacts_dir: artifacts

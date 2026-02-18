@@ -4,6 +4,9 @@
 This document is a fast map of the Python runtime/evaluation stack so you can see what to edit when adding models, providers, or benchmarks.
 
 Scope covered in this file:
+- `profiles/agents/*`
+- `profiles/runs/*`
+- `profiles/prompts/*`
 - `runtime/*`
 - `benchmarks/*`
 - `external/*` (third-party harnesses/assets used during eval)
@@ -89,7 +92,7 @@ flowchart TD
 
 ## Where to Change Things
 ### New model on existing API
-- Primary touchpoints: `agents/*.yaml` (model id), `agents/spec_loader.py` (if spec keys change), `runtime/backend_factory.py` (if new backend config knobs), `runtime/model_backend.py` (if request payload/retry behavior changes).
+- Primary touchpoints: `profiles/agents/*.yaml` (model id), `profiles/prompts/*.txt` (prompt variants), `agents/spec_loader.py` (if spec keys change), `runtime/backend_factory.py` (if new backend config knobs), `runtime/model_backend.py` (if request payload/retry behavior changes).
 - Usually unchanged: benchmark adapters/evaluators and run/eval orchestration.
 
 ### New API/provider integration
@@ -137,10 +140,11 @@ flowchart TD
 
 ## Quick Playbooks
 ### Add a new model id (same provider)
-1. Update model id in `agents/*.yaml` (`backend.model`).
-2. If new provider options are needed, thread them through `runtime/backend_factory.py`.
-3. If payload/retry behavior differs for that model family, adjust `runtime/model_backend.py`.
-4. Run one small `agent run` and `agent eval` smoke check to verify outputs and manifest fields.
+1. Update model id in `profiles/agents/*.yaml` (`backend.model`).
+2. If prompt wording changes are needed, edit or add files under `profiles/prompts/` and point `prompt_file` to the target file.
+3. If new provider options are needed, thread them through `runtime/backend_factory.py`.
+4. If payload/retry behavior differs for that model family, adjust `runtime/model_backend.py`.
+5. Run one small `agent run` and `agent eval` smoke check to verify outputs and manifest fields.
 
 ### Add a new API/provider backend
 1. Implement a backend class in `runtime/model_backend.py` that returns `GenerationResult`.

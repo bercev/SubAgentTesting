@@ -145,15 +145,34 @@ class ToolRegistry:
 
         if name not in self._tools:
             return {"error": f"unknown tool {name}"}
-        return self._tools[name](**arguments)
+        if not isinstance(arguments, dict):
+            return {"error": f"invalid arguments for {name}: expected object payload"}
+        try:
+            return self._tools[name](**arguments)
+        except TypeError as exc:
+            return {
+                "error": f"invalid arguments for {name}: {exc}",
+                "provided_keys": sorted(arguments.keys()),
+            }
+
+    def _workspace_root(self) -> Path:
+        """Return normalized absolute workspace root path."""
+
+        return self.ctx.workspace_root.resolve()
+
+    def _resolve_target(self, path: str) -> tuple[Path, Path]:
+        """Resolve one workspace-relative target path and return (root, target)."""
+
+        root = self._workspace_root()
+        target = (root / path).resolve()
+        return root, target
 
     # Tool implementations
 
     def workspace_list(self, path: str) -> Dict[str, Any]:
         """List files/directories under a workspace-relative path."""
 
-        root = self.ctx.workspace_root
-        target = (root / path).resolve()
+        root, target = self._resolve_target(path)
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
         if not target.exists():
@@ -169,8 +188,7 @@ class ToolRegistry:
     def workspace_open(self, path: str, start_line: int = 1, end_line: Optional[int] = None) -> Dict[str, Any]:
         """Read a line range from a workspace file with escape checks."""
 
-        root = self.ctx.workspace_root
-        target = (root / path).resolve()
+        root, target = self._resolve_target(path)
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
         if not target.is_file():
@@ -185,7 +203,7 @@ class ToolRegistry:
     def workspace_search(self, query: str, glob: str = "**/*") -> Dict[str, Any]:
         """Regex-search files under workspace and return capped matches."""
 
-        root = self.ctx.workspace_root
+        root = self._workspace_root()
         pattern = re.compile(query)
         matches = []
         for path in root.glob(glob):
@@ -204,7 +222,7 @@ class ToolRegistry:
     def workspace_apply_patch(self, unified_diff: str) -> Dict[str, Any]:
         """Run `patch` in workspace root and return success + truncated output."""
 
-        root = self.ctx.workspace_root
+        root = self._workspace_root()
         with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
             tmp.write(unified_diff)
             tmp_path = tmp.name
@@ -225,8 +243,7 @@ class ToolRegistry:
     def workspace_write(self, path: str, content: str) -> Dict[str, Any]:
         """Overwrite a workspace file after path safety checks."""
 
-        root = self.ctx.workspace_root
-        target = (root / path).resolve()
+        root, target = self._resolve_target(path)
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -236,7 +253,7 @@ class ToolRegistry:
     def bash(self, cmd: str, timeout_s: Optional[int] = None) -> Dict[str, Any]:
         """Execute one shell command in workspace with timeout and truncation."""
 
-        root = self.ctx.workspace_root
+        root = self._workspace_root()
         timeout = timeout_s or self.ctx.bash_timeout_s
         proc = subprocess.run(
             cmd,

@@ -34,5 +34,5 @@ echo
 echo "Bootstrap complete."
 echo "Next steps:"
 echo "  source .venv/bin/activate"
-echo "  agent run --agent agents/openrouter_free.yaml --run-config configs/runs/default.yaml --mode patch_only --selector 10"
-echo "  agent eval artifacts/<run_id>/predictions.jsonl --run-config configs/runs/default.yaml"
+echo "  agent run --agent profiles/agents/openrouter_free.yaml --run-config profiles/runs/default.yaml --mode patch_only --selector 10"
+echo "  agent eval artifacts/<run_id>/predictions.jsonl --run-config profiles/runs/default.yaml"

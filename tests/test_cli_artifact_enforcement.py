@@ -59,7 +59,15 @@ class _FakeRegistry:
         return _FakeAdapter
 
 
-def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool = False):
+def _run_once(
+    monkeypatch,
+    tmp_path: Path,
+    raw_artifact: str,
+    *,
+    verbose: bool = False,
+    mode: str = "patch_only",
+    runtime_tool_payload: dict | None = None,
+):
     run_config = normalize_run_config(
         {
             "benchmark": {
@@ -75,7 +83,7 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool =
                 "workdir": ".",
             },
             "runtime": {
-                "mode": "patch_only",
+                "mode": mode,
                 "selector": 1,
                 "max_tool_calls": 1,
                 "max_wall_time_s": 10,
@@ -102,10 +110,13 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool =
             pass
 
         def run(self, task, prompt, tool_schemas, decoding_defaults=None):
+            metadata = {"terminated": True, "repo": "astropy/astropy"}
+            if runtime_tool_payload is not None:
+                metadata["tool_quality_runtime"] = runtime_tool_payload
             return AgentResult(
                 task_id=task.task_id,
                 final_artifact=raw_artifact,
-                metadata={"terminated": True, "repo": "astropy/astropy"},
+                metadata=metadata,
             )
 
     monkeypatch.setattr(run_service, "BenchmarkRegistry", lambda: _FakeRegistry())
@@ -118,7 +129,7 @@ def _run_once(monkeypatch, tmp_path: Path, raw_artifact: str, *, verbose: bool =
     monkeypatch.setattr(run_service, "AgentRuntime", _FakeRuntime)
 
     outcome = run_service.execute_run(
-        agent_path="agents/qwen3_coder_free.yaml",
+        agent_path="profiles/agents/qwen3_coder_free.yaml",
         config=run_config,
         verbose=verbose,
     )
@@ -190,6 +201,69 @@ def test_run_service_writes_run_log_file(monkeypatch, tmp_path: Path):
     assert "Starting run:" in content
     assert "Run summary:" in content
     assert "artifact_valid=" in content
+
+
+def test_run_service_run_log_uses_structured_prefix(monkeypatch, tmp_path: Path):
+    _, outcome = _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=False)
+    first_line = outcome.run_log_path.read_text(encoding="utf-8").splitlines()[0]
+    assert " | INFO" in first_line
+    assert " | run_service.py:" in first_line
+    assert " | Starting run:" in first_line
+
+
+def test_run_service_writes_tool_quality_artifacts_and_logs(monkeypatch, tmp_path: Path):
+    runtime_tool_payload = {
+        "mode": "tools_enabled",
+        "loop_exit_reason": "submitted",
+        "budget_exhausted": False,
+        "wall_time_exhausted": False,
+        "termination_ack": True,
+        "events": [
+            {
+                "turn_index": 0,
+                "call_index": 0,
+                "tool_name": "bash",
+                "is_termination_tool": False,
+                "allowed": True,
+                "executed": True,
+                "success": True,
+                "error_code": "none",
+                "args_size_bytes": 12,
+                "result_size_bytes": 24,
+                "latency_ms": 3,
+                "return_code": 0,
+            }
+        ],
+    }
+    _, outcome = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        verbose=False,
+        mode="tools_enabled",
+        runtime_tool_payload=runtime_tool_payload,
+    )
+
+    telemetry_path = outcome.predictions_path.parent / "tool_telemetry.jsonl"
+    assert telemetry_path.exists()
+    rows = [
+        json.loads(line)
+        for line in telemetry_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert any(row.get("row_type") == "tool_call" for row in rows)
+    assert any(row.get("row_type") == "task_summary" for row in rows)
+
+    manifest = json.loads(outcome.manifest_path.read_text(encoding="utf-8"))
+    tool_quality = manifest["tool_quality"]
+    assert tool_quality["version"] == "v1"
+    assert tool_quality["telemetry_path"] == str(telemetry_path.resolve())
+    assert tool_quality["counts"]["tool_calls_total"] == 1
+    assert tool_quality["counts"]["tasks_total"] == 1
+
+    run_log = outcome.run_log_path.read_text(encoding="utf-8")
+    assert "tool_quality task=" in run_log
+    assert "tool_quality summary" in run_log
 
 
 def test_derive_run_id_from_artifacts_path(tmp_path: Path):
