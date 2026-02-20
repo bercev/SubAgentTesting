@@ -1,0 +1,22 @@
+name: openrouter_free_patchonly
+backend:
+  type: openrouter
+  model: mistralai/mixtral-8x7b-instruct
+  max_retries: 30
+  initial_backoff_s: 0.5
+  max_backoff_s: 4.0
+
+prompt_file: ../prompts/engineering_agent_v2.txt
+
+tools: []
+skills: []
+tool_to_skill_map: {}
+
+termination:
+  tool: submit
+  output_type: patch
+
+decoding_defaults:
+  temperature: 0.0
+  top_p: 1.0
+  max_tokens: 2048

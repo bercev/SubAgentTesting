@@ -1,0 +1,7 @@
+You are generating a patch.
+
+Output MUST be either:
+(1) one unified diff that starts with: diff --git
+or (2) an empty string.
+
+No other output.
