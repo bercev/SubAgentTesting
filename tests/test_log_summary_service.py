@@ -118,6 +118,10 @@ def test_execute_run_log_summary_aggregates_api_usage_and_preserves_manifest(tmp
     assert manifest["evaluation"]["status"] == "not_run"
     assert manifest["run_log_summary"]["run_id"] == run_id
     assert manifest["run_log_summary"]["openrouter_cost"]["cost_usd_total"] == 0.0123
+    updated_log = run_log_path.read_text(encoding="utf-8")
+    assert "post_run_summary_block_begin version=v1" in updated_log
+    assert "post_run_summary_line index=1 text=Post-run summary:" in updated_log
+    assert "post_run_summary_block_end version=v1" in updated_log
 
 
 def test_execute_run_log_summary_legacy_cost_fallback_from_api_response_preview(tmp_path: Path):
@@ -177,3 +181,58 @@ def test_execute_run_log_summary_legacy_cost_fallback_from_api_response_preview(
     assert cost["responses_total"] == 2
     assert any("legacy" in warning for warning in outcome.summary["warnings"])
     assert any("truncated" in warning for warning in outcome.summary["warnings"])
+
+
+def test_execute_run_log_summary_repeated_runs_append_blocks_but_keep_metrics_stable(tmp_path: Path):
+    run_id = "2026-02-24_120002"
+    run_root = tmp_path / "artifacts" / run_id
+    run_root.mkdir(parents=True)
+    run_log_path = run_root / "run.log"
+
+    lines = [
+        _log_line(
+            "2026-02-24 12:00:00",
+            "Starting run: run_id=2026-02-24_120002 benchmark=swebench_verified split=test mode=patch_only tasks=1 model=openrouter/free agent_profile=profiles/agents/openrouter_free.yaml",
+        ),
+        _log_line("2026-02-24 12:00:01", "task=task-1 task_start workspace_root=."),
+        _log_line(
+            "2026-02-24 12:00:02",
+            "task=task-1 api_request provider=openrouter model=openrouter/free attempt=1/1 method=POST url=https://openrouter.ai payload_bytes=10 payload_preview={}",
+            source="model_backend.py",
+        ),
+        _log_line(
+            "2026-02-24 12:00:03",
+            "task=task-1 api_response provider=openrouter model=openrouter/free attempt=1/1 status_code=200 latency_ms=50 body_bytes=10 body_preview={\"id\":\"x\"}",
+            source="model_backend.py",
+        ),
+        _log_line(
+            "2026-02-24 12:00:03",
+            "task=task-1 api_usage provider=openrouter model=openrouter/free attempt=1/1 response_id=x prompt_tokens=2 completion_tokens=3 total_tokens=5 cost_usd=0.1 is_byok=False",
+            source="model_backend.py",
+        ),
+        _log_line(
+            "2026-02-24 12:00:04",
+            "task=task-1 terminated=True output_type=patch artifact_valid=True artifact_reason=ok",
+        ),
+        _log_line(
+            "2026-02-24 12:00:05",
+            "Run summary: run_id=2026-02-24_120002 tasks=1 valid_artifacts=1 invalid_artifacts=0",
+        ),
+    ]
+    run_log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    first = execute_run_log_summary(run_log_path=run_log_path)
+    second = execute_run_log_summary(run_log_path=run_log_path)
+
+    assert first.summary["duration_s"] == second.summary["duration_s"] == 5
+    assert first.summary["api"]["requests"] == second.summary["api"]["requests"] == 1
+    assert first.summary["api"]["responses"] == second.summary["api"]["responses"] == 1
+    assert first.summary["openrouter_cost"]["cost_usd_total"] == second.summary["openrouter_cost"]["cost_usd_total"] == 0.1
+
+    final_log = run_log_path.read_text(encoding="utf-8")
+    assert final_log.count("post_run_summary_block_begin version=v1") == 2
+    assert final_log.count("post_run_summary_block_end version=v1") == 2
+
+    manifest = json.loads((run_root / "manifest.json").read_text(encoding="utf-8"))
+    assert "run_log_summary" in manifest
+    assert manifest["run_log_summary"]["run_id"] == run_id

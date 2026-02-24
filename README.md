@@ -246,6 +246,14 @@ Run-log summary data is persisted under:
 artifacts/<run_id>/manifest.json -> run_log_summary
 ```
 
+The human-readable post-run summary is also appended to:
+
+```text
+artifacts/<run_id>/run.log
+```
+
+Re-running `agent summarize-run artifacts/<run_id>/run.log` appends another generated summary block to `run.log`.
+
 OpenRouter cost estimates in `run_log_summary` come from logged response `usage` fields and may be partial for older runs that predate the `api_usage` log event.
 
 ## Accuracy Summary

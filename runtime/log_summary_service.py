@@ -8,12 +8,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from runtime.manifest_store import manifest_path, now_iso, read_manifest, write_manifest
+from runtime.manifest_store import append_log, manifest_path, now_iso, read_manifest, write_manifest
 
 RUN_ID_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}$")
 LOG_LINE_SPLIT = " | "
 LOG_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 TRUNCATED_MARKER = "...[truncated]"
+POST_RUN_SUMMARY_BLOCK_BEGIN = "post_run_summary_block_begin"
+POST_RUN_SUMMARY_BLOCK_LINE = "post_run_summary_line"
+POST_RUN_SUMMARY_BLOCK_END = "post_run_summary_block_end"
 
 
 @dataclass
@@ -415,6 +418,33 @@ def _format_terminal_lines(summary: Dict[str, Any], manifest: Dict[str, Any]) ->
     return lines
 
 
+def _append_summary_block_to_run_log(
+    *,
+    run_log_path: Path,
+    terminal_lines: List[str],
+    status: str,
+) -> None:
+    """Append a marked generated summary block into the run log."""
+
+    append_log(
+        run_log_path,
+        f"{POST_RUN_SUMMARY_BLOCK_BEGIN} version=v1",
+        source="log_summary_service.py",
+    )
+    for index, line in enumerate(terminal_lines, start=1):
+        normalized_text = (line or "").replace("\r", " ").replace("\n", " ")
+        append_log(
+            run_log_path,
+            f"{POST_RUN_SUMMARY_BLOCK_LINE} index={index} text={normalized_text}",
+            source="log_summary_service.py",
+        )
+    append_log(
+        run_log_path,
+        f"{POST_RUN_SUMMARY_BLOCK_END} version=v1 status={status}",
+        source="log_summary_service.py",
+    )
+
+
 def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
     """Parse one run log, update manifest with summary, and return terminal lines."""
 
@@ -461,12 +491,24 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
     legacy_response_previews: List[str] = []
     tool_quality_summary: Dict[str, Any] = {}
 
+    in_generated_summary_block = False
+
     for line_no, raw_line in enumerate(run_log_path.read_text(encoding="utf-8").splitlines(), start=1):
         if not raw_line.strip():
             continue
         parsed_line = _parse_prefix(raw_line)
         if parsed_line is None:
             warnings.append(f"malformed run.log line {line_no}")
+            continue
+
+        message = parsed_line["message"]
+        if message.startswith(POST_RUN_SUMMARY_BLOCK_BEGIN):
+            in_generated_summary_block = True
+            continue
+        if message.startswith(POST_RUN_SUMMARY_BLOCK_END):
+            in_generated_summary_block = False
+            continue
+        if in_generated_summary_block or message.startswith(POST_RUN_SUMMARY_BLOCK_LINE):
             continue
 
         timestamp_text = parsed_line["timestamp"]
@@ -481,7 +523,6 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
                 last_ts = dt
                 ended_at_text = timestamp_text
 
-        message = parsed_line["message"]
         level = parsed_line["level"]
         task_id = _extract_value(message, "task")
 
@@ -610,6 +651,9 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
             legacy_parsed += 1
         if legacy_parsed > 0:
             warnings.append("openrouter cost estimated via legacy api_response body_preview fallback")
+
+    if in_generated_summary_block:
+        warnings.append("unterminated generated post-run summary block found in run.log")
 
     duration_s: Optional[int] = None
     if first_ts is not None and last_ts is not None:
@@ -751,6 +795,11 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
     existing_manifest["updated_at"] = now
     existing_manifest["run_log_summary"] = summary
     write_manifest(out_manifest_path, existing_manifest)
+    _append_summary_block_to_run_log(
+        run_log_path=run_log_path,
+        terminal_lines=terminal_lines,
+        status=summary_status,
+    )
 
     return RunLogSummaryOutcome(
         run_id=run_id,
