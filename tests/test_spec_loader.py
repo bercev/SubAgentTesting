@@ -58,3 +58,71 @@ decoding_defaults: {}
     assert "Prompt from file" in prompt
     assert "Allowed Tools" in prompt
     assert allowed == {"submit"}
+
+
+def test_agent_spec_tools_allowlist_intersects_with_skill_tools(tmp_path: Path):
+    skills_dir = tmp_path / "skills" / "s1"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("Allowed Tools:\n- submit\n- workspace_open\n")
+
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi {skills}"
+tools: [bash, submit]
+skills: [s1]
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    spec, _prompt, allowed = loader.load(agent_yaml)
+
+    assert spec.tools == ["bash", "submit"]
+    assert allowed == {"submit"}
+
+
+def test_agent_spec_empty_tools_list_is_explicit_empty_allowlist(tmp_path: Path):
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi {skills}"
+tools: []
+skills: []
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    spec, _prompt, allowed = loader.load(agent_yaml)
+
+    assert spec.tools == []
+    assert allowed == set()
+
+
+def test_agent_spec_missing_tools_and_skills_keeps_unrestricted_allowlist(tmp_path: Path):
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi"
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    spec, _prompt, allowed = loader.load(agent_yaml)
+
+    assert spec.tools is None
+    assert allowed is None

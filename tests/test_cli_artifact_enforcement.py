@@ -61,6 +61,9 @@ class _FakeRegistry:
         return _FakeAdapter
 
 
+_UNSET = object()
+
+
 def _run_once(
     monkeypatch,
     tmp_path: Path,
@@ -69,6 +72,8 @@ def _run_once(
     verbose: bool = False,
     mode: str = "patch_only",
     runtime_tool_payload: dict | None = None,
+    loader_allowed_tools=_UNSET,
+    runtime_init_capture: dict | None = None,
 ):
     run_config = normalize_run_config(
         {
@@ -109,7 +114,8 @@ def _run_once(
 
     class _FakeRuntime:
         def __init__(self, *args, **kwargs):
-            pass
+            if runtime_init_capture is not None:
+                runtime_init_capture["kwargs"] = kwargs
 
         def run(self, task, prompt, tool_schemas, decoding_defaults=None):
             metadata = {"terminated": True, "repo": "astropy/astropy"}
@@ -125,7 +131,11 @@ def _run_once(
     monkeypatch.setattr(
         run_service.AgentSpecLoader,
         "load",
-        lambda *_args, **_kwargs: (spec, "Prompt", set()),
+        lambda *_args, **_kwargs: (
+            spec,
+            "Prompt",
+            set() if loader_allowed_tools is _UNSET else loader_allowed_tools,
+        ),
     )
     monkeypatch.setattr(run_service, "build_backend", lambda *_args, **_kwargs: object())
     monkeypatch.setattr(run_service, "AgentRuntime", _FakeRuntime)
@@ -143,6 +153,37 @@ def _run_once(
     ]
     assert len(records) == 1
     return records[0], outcome
+
+
+def test_run_service_tools_enabled_preserves_explicit_empty_allowlist(monkeypatch, tmp_path: Path):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools=set(),
+        runtime_init_capture=captured,
+    )
+
+    assert captured["kwargs"]["allowed_tools"] == set()
+
+
+def test_run_service_tools_enabled_uses_full_fallback_when_allowlist_is_none(monkeypatch, tmp_path: Path):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools=None,
+        runtime_init_capture=captured,
+    )
+
+    allowed_tools = captured["kwargs"]["allowed_tools"]
+    assert isinstance(allowed_tools, set)
+    assert "submit" in allowed_tools
+    assert "bash" in allowed_tools
 
 
 def test_run_service_preserves_invalid_patch_output(monkeypatch, tmp_path: Path):

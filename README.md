@@ -506,13 +506,32 @@ Notes:
 | `backend.max_backoff_s` | `float` | `10.0` | No | Max retry backoff delay. |
 | `prompt_template` | `str` | none | Conditionally | Inline system prompt template (`{skills}` placeholder supported). Use when `prompt_file` is not set. |
 | `prompt_file` | `str` | none | Conditionally | Path to system prompt text file. Use when `prompt_template` is not set. |
-| `tools` | `list[dict]` | `[]` | No | Reserved for agent/tool policy metadata. |
+| `tools` | `list[str]` | omitted | No | Optional explicit tool allowlist for `tools_enabled` mode. Effective allowlist is the intersection of `tools` and tools allowed by loaded `skills`. In `patch_only`, runtime still exposes only `submit`. |
 | `skills` | `list[str]` | `[]` | No | Skill folder names loaded from `skills/<name>/SKILL.md`. |
 | `tool_to_skill_map` | `dict[str, list[str]]` | `{}` | No | Optional tool-to-skill mapping metadata. |
 | `termination` | `dict` | `{}` | No | Termination metadata (`tool`, `output_type`) for profile consistency. |
 | `decoding_defaults` | `dict[str, Any]` | `{}` | No | Generation defaults passed to backend (e.g., `temperature`, `top_p`, `max_tokens`). |
 
 ### Included YAML Presets
+
+Tool allowlist behavior notes:
+- `skills` serve two purposes: prompt injection and skill-derived allowed-tool declarations.
+- In `tools_enabled` mode, runtime uses the intersection of skill-allowed tools and agent `tools` (when `tools` is present).
+- If `tools` is omitted and no skills declare tools, runtime falls back to the full tool registry in `tools_enabled` mode (legacy-compatible behavior).
+- In `patch_only` mode, runtime ignores agent `tools` and exposes only the `submit` termination tool.
+
+Example agent allowlist snippet:
+
+```yaml
+tools:
+  - bash
+  - submit
+  - workspace_apply_patch
+  - workspace_list
+  - workspace_open
+  - workspace_search
+  - workspace_write
+```
 
 #### Run Config Presets (`profiles/runs/*.yaml`)
 

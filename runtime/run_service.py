@@ -167,9 +167,12 @@ def execute_run(
                 allowed = {"submit"}
                 tool_schemas = None
             else:
-                allowed = allowed_tools or {
-                    schema.get("function", {}).get("name") for schema in tool_registry.schemas
-                }
+                if allowed_tools is None:
+                    allowed = {
+                        schema.get("function", {}).get("name") for schema in tool_registry.schemas
+                    }
+                else:
+                    allowed = allowed_tools
                 tool_schemas = _filter_tool_schemas(tool_registry, allowed)
 
             runtime = AgentRuntime(

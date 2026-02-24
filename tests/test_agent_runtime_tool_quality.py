@@ -127,6 +127,68 @@ def test_agent_runtime_records_not_allowed_tool_call():
     assert registry.calls == []
 
 
+def test_agent_runtime_allows_tools_when_allowlist_is_none():
+    backend = _SequenceBackend(
+        [
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[ToolCall(name="workspace_list", arguments={"path": "."})],
+            ),
+            GenerationResult(assistant_text="diff --git a/a b/a", tool_calls=[]),
+        ]
+    )
+    registry = _ToolRegistryStub({"workspace_list": {"entries": []}})
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools=None,
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="tools_enabled",
+    )
+
+    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    events = result.metadata["tool_quality_runtime"]["events"]
+
+    assert len(events) == 1
+    assert events[0]["tool_name"] == "workspace_list"
+    assert events[0]["allowed"] is True
+    assert events[0]["success"] is True
+    assert registry.calls == ["workspace_list"]
+
+
+def test_agent_runtime_denies_tools_when_allowlist_is_empty_set():
+    backend = _SequenceBackend(
+        [
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[ToolCall(name="workspace_list", arguments={"path": "."})],
+            ),
+            GenerationResult(assistant_text="diff --git a/a b/a", tool_calls=[]),
+        ]
+    )
+    registry = _ToolRegistryStub({"workspace_list": {"entries": []}})
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools=set(),
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="tools_enabled",
+    )
+
+    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    events = result.metadata["tool_quality_runtime"]["events"]
+
+    assert len(events) == 1
+    assert events[0]["tool_name"] == "workspace_list"
+    assert events[0]["allowed"] is False
+    assert events[0]["error_code"] == "not_allowed"
+    assert registry.calls == []
+
+
 def test_agent_runtime_marks_nonzero_returncode_tool_result_as_failure():
     backend = _SequenceBackend(
         [

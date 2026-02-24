@@ -4,7 +4,14 @@ backend:
   model: qwen/qwen3-next-80b-a3b-instruct:free
 prompt_file: ../prompts/engineering_agent_v1.txt
 
-tools: []
+tools:
+  - bash
+  - submit
+  - workspace_apply_patch
+  - workspace_list
+  - workspace_open
+  - workspace_search
+  - workspace_write
 skills:
   - tool-use-protocol
   - repo-triage

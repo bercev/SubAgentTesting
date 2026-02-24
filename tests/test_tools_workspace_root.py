@@ -38,3 +38,23 @@ def test_execute_returns_error_for_invalid_tool_argument_shape(monkeypatch, tmp_
     assert "error" in result
     assert "invalid arguments for workspace_open" in result["error"]
     assert result.get("provided_keys") == ["raw"]
+
+
+def test_bash_tool_accepts_command_alias(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+
+    result = registry.execute("bash", {"command": "pwd"})
+
+    assert result["returncode"] == 0
+    assert str(tmp_path) in result["output"]
+
+
+def test_bash_tool_prefers_cmd_over_command_alias(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+
+    result = registry.execute("bash", {"cmd": "printf cmd", "command": "printf command"})
+
+    assert result["returncode"] == 0
+    assert result["output"] == "cmd"

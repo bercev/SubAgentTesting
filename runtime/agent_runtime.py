@@ -122,7 +122,7 @@ class AgentRuntime:
                     "latency_ms": 0,
                     "return_code": None,
                 }
-                if self.allowed_tools and tc.name not in self.allowed_tools:
+                if self.allowed_tools is not None and tc.name not in self.allowed_tools:
                     event.update(
                         {
                             "allowed": False,
