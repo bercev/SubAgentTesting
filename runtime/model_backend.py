@@ -57,6 +57,7 @@ class OpenRouterBackend(ModelBackend):
         initial_backoff_s: float = 1.0,
         max_backoff_s: float = 10.0,
         event_logger: Optional[Callable[[str], None]] = None,
+        full_log_previews: bool = False,
     ) -> None:
         """Initialize backend with strict model requirements and retry policy."""
 
@@ -74,6 +75,7 @@ class OpenRouterBackend(ModelBackend):
         self.initial_backoff_s = max(0.0, float(initial_backoff_s))
         self.max_backoff_s = max(0.0, float(max_backoff_s))
         self.event_logger = event_logger
+        self.full_log_previews = bool(full_log_previews)
 
     def generate(
         self,
@@ -105,7 +107,7 @@ class OpenRouterBackend(ModelBackend):
                     f" method=POST"
                     f" url={endpoint}"
                     f" payload_bytes={self._json_size_bytes(payload)}"
-                    f" payload_preview={self._preview_json(payload)}"
+                    f" payload_preview={self._preview_json(payload, limit=self._preview_limit(2000))}"
                 )
                 started = time.monotonic()
                 try:
@@ -149,7 +151,7 @@ class OpenRouterBackend(ModelBackend):
                     f" status_code={response.status_code}"
                     f" latency_ms={latency_ms}"
                     f" body_bytes={len(response_text.encode('utf-8', errors='ignore'))}"
-                    f" body_preview={self._preview_text(response_text, limit=1200)}"
+                    f" body_preview={self._preview_text(response_text, limit=self._preview_limit(1200))}"
                 )
                 if response.status_code >= 400:
                     detail = response_text[:2000]
@@ -253,7 +255,7 @@ class OpenRouterBackend(ModelBackend):
                         f" provider=openrouter"
                         f" model={self.model}"
                         f" tool_name={name or 'unknown'}"
-                        f" raw_preview={self._preview_text(args, limit=800)}"
+                        f" raw_preview={self._preview_text(args, limit=self._preview_limit(800))}"
                     )
                     args = {"raw": args}
             if name:
@@ -290,15 +292,15 @@ class OpenRouterBackend(ModelBackend):
         return len(serialized.encode("utf-8", errors="ignore"))
 
     @staticmethod
-    def _preview_text(text: str, limit: int = 2000) -> str:
+    def _preview_text(text: str, limit: Optional[int] = 2000) -> str:
         """Compact and truncate free-text fields before logging."""
 
         compact = " ".join((text or "").split())
-        if len(compact) <= limit:
+        if limit is None or len(compact) <= limit:
             return compact
         return compact[:limit] + "...[truncated]"
 
-    def _preview_json(self, payload: Dict[str, Any], limit: int = 2000) -> str:
+    def _preview_json(self, payload: Dict[str, Any], limit: Optional[int] = 2000) -> str:
         """Serialize payloads safely for run-log diagnostics."""
 
         try:
@@ -306,6 +308,11 @@ class OpenRouterBackend(ModelBackend):
         except Exception:
             serialized = str(payload)
         return self._preview_text(serialized, limit=limit)
+
+    def _preview_limit(self, default_limit: int) -> Optional[int]:
+        """Return preview truncation limit, or None when full previews are enabled."""
+
+        return None if self.full_log_previews else default_limit
 
     def _emit_log(self, message: str) -> None:
         """Best-effort sink for backend diagnostics that must not break runs."""

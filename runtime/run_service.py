@@ -53,11 +53,11 @@ def _filter_tool_schemas(registry: ToolRegistry, allowed: set[str]) -> list[dict
     return schemas
 
 
-def _preview_text_for_log(text: str, limit: int = 400) -> str:
+def _preview_text_for_log(text: str, limit: Optional[int] = 400) -> str:
     """Normalize and truncate multi-line text for compact run-log diagnostics."""
 
     compact = " ".join((text or "").split())
-    if len(compact) <= limit:
+    if limit is None or len(compact) <= limit:
         return compact
     return compact[:limit] + "...[truncated]"
 
@@ -71,6 +71,7 @@ def execute_run(
     selector: Optional[int] = None,
     mode: Optional[str] = None,
     verbose: bool = False,
+    full_log_previews: bool = False,
 ) -> RunOutcome:
     """Execute benchmark tasks and write predictions/logs/manifest artifacts."""
 
@@ -162,7 +163,11 @@ def execute_run(
                     source="model_backend.py",
                 )
 
-            backend = build_backend(spec.backend, event_logger=_api_log)
+            backend = build_backend(
+                spec.backend,
+                event_logger=_api_log,
+                full_log_previews=full_log_previews,
+            )
             if mode_name == "patch_only":
                 allowed = {"submit"}
                 tool_schemas = None
@@ -204,7 +209,7 @@ def execute_run(
                 run_log_path,
                 (
                     f"task={task.task_id} artifact_bytes={len(artifact.encode('utf-8', errors='ignore'))} "
-                    f"artifact_preview={_preview_text_for_log(artifact)}"
+                    f"artifact_preview={_preview_text_for_log(artifact, limit=None if full_log_previews else 400)}"
                 ),
                 level="INFO" if policy_result.valid else "WARNING",
             )

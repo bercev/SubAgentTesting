@@ -61,6 +61,11 @@ def run(
         "--summary/--no-summary",
         help="Show post-run summary and persist it into manifest by default.",
     ),
+    full_log_previews: bool = typer.Option(
+        False,
+        "--full-log-previews/--compact-log-previews",
+        help="Write full run.log preview fields (payload/body/artifact/raw); can produce very large logs.",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose/--quiet",
@@ -80,6 +85,7 @@ def run(
         selector=selector,
         mode=mode,
         verbose=verbose,
+        full_log_previews=full_log_previews,
     )
 
     print(
@@ -121,6 +127,11 @@ def predict(
         "--summary/--no-summary",
         help="Show post-run summary and persist it into manifest by default.",
     ),
+    full_log_previews: bool = typer.Option(
+        False,
+        "--full-log-previews/--compact-log-previews",
+        help="Write full run.log preview fields (payload/body/artifact/raw); can produce very large logs.",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose/--quiet",
@@ -137,6 +148,7 @@ def predict(
         mode="patch_only",
         run_config=run_config,
         summary=summary,
+        full_log_previews=full_log_previews,
         verbose=verbose,
     )
 

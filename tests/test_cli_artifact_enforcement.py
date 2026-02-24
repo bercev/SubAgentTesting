@@ -74,6 +74,8 @@ def _run_once(
     runtime_tool_payload: dict | None = None,
     loader_allowed_tools=_UNSET,
     runtime_init_capture: dict | None = None,
+    full_log_previews: bool = False,
+    build_backend_capture: dict | None = None,
 ):
     run_config = normalize_run_config(
         {
@@ -137,13 +139,20 @@ def _run_once(
             set() if loader_allowed_tools is _UNSET else loader_allowed_tools,
         ),
     )
-    monkeypatch.setattr(run_service, "build_backend", lambda *_args, **_kwargs: object())
+    def _fake_build_backend(*args, **kwargs):
+        if build_backend_capture is not None:
+            build_backend_capture["args"] = args
+            build_backend_capture["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(run_service, "build_backend", _fake_build_backend)
     monkeypatch.setattr(run_service, "AgentRuntime", _FakeRuntime)
 
     outcome = run_service.execute_run(
         agent_path="profiles/agents/qwen3_coder_free.yaml",
         config=run_config,
         verbose=verbose,
+        full_log_previews=full_log_previews,
     )
 
     records = [
@@ -308,6 +317,50 @@ def test_cli_run_can_skip_post_run_summary(monkeypatch, tmp_path: Path, capsys):
     assert called["summary"] == 0
 
 
+def test_cli_run_passes_full_log_previews_flag_to_execute_run(monkeypatch, capsys):
+    captured: dict = {}
+    fake_run_outcome = run_service.RunOutcome(
+        run_id="2026-02-24_120000",
+        benchmark_name="swebench_verified",
+        split_name="test",
+        mode_name="patch_only",
+        tasks_total=1,
+        valid_artifacts=1,
+        invalid_artifacts=0,
+        model_name_or_path="openrouter/free",
+        predictions_path=Path("artifacts/2026-02-24_120000/predictions.jsonl"),
+        manifest_path=Path("artifacts/2026-02-24_120000/manifest.json"),
+        run_log_path=Path("artifacts/2026-02-24_120000/run.log"),
+        manifest_payload={},
+    )
+
+    monkeypatch.setattr(cli, "load_run_config", lambda _: object())
+
+    def _fake_execute_run(**kwargs):
+        captured.update(kwargs)
+        return fake_run_outcome
+
+    monkeypatch.setattr(cli, "execute_run", _fake_execute_run)
+
+    cli.run(agent="a.yaml", run_config="r.yaml", summary=False, full_log_previews=True)
+
+    capsys.readouterr()
+    assert captured["full_log_previews"] is True
+
+
+def test_cli_predict_forwards_full_log_previews_flag(monkeypatch):
+    captured: dict = {}
+
+    def _fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "run", _fake_run)
+
+    cli.predict(agent="a.yaml", run_config="r.yaml", summary=False, full_log_previews=True)
+
+    assert captured["full_log_previews"] is True
+
+
 def test_cli_summarize_run_prints_summary_and_updates_manifest(monkeypatch, tmp_path: Path, capsys):
     run_log_path = tmp_path / "artifacts" / "2026-02-24_120000" / "run.log"
     run_log_path.parent.mkdir(parents=True)
@@ -351,6 +404,42 @@ def test_run_service_writes_run_log_file(monkeypatch, tmp_path: Path):
     assert "Starting run:" in content
     assert "Run summary:" in content
     assert "artifact_valid=" in content
+
+
+def test_run_service_artifact_preview_truncates_by_default(monkeypatch, tmp_path: Path):
+    long_artifact = "A" * 500 + "TAIL_MARKER"
+    _, outcome = _run_once(monkeypatch, tmp_path, raw_artifact=long_artifact, verbose=False)
+    run_log = outcome.run_log_path.read_text(encoding="utf-8")
+    assert "artifact_preview=" in run_log
+    assert "...[truncated]" in run_log
+
+
+def test_run_service_artifact_preview_full_when_enabled(monkeypatch, tmp_path: Path):
+    long_artifact = "A" * 500 + "TAIL_MARKER"
+    _, outcome = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact=long_artifact,
+        verbose=False,
+        full_log_previews=True,
+    )
+    run_log = outcome.run_log_path.read_text(encoding="utf-8")
+    assert "artifact_preview=" in run_log
+    assert "TAIL_MARKER" in run_log
+    assert "...[truncated]" not in run_log
+
+
+def test_run_service_passes_full_log_previews_to_build_backend(monkeypatch, tmp_path: Path):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        verbose=False,
+        full_log_previews=True,
+        build_backend_capture=captured,
+    )
+    assert captured["kwargs"]["full_log_previews"] is True
 
 
 def test_run_service_run_log_uses_structured_prefix(monkeypatch, tmp_path: Path):
