@@ -141,3 +141,61 @@ def test_generate_does_not_extract_tool_calls_from_assistant_text(monkeypatch):
     )
     assert result.assistant_text.startswith("<tool_call")
     assert result.tool_calls == []
+
+
+def test_generate_emits_api_usage_event_when_usage_present(monkeypatch):
+    emitted: list[str] = []
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse(
+                200,
+                "",
+                payload={
+                    "id": "gen-123",
+                    "provider": "StepFun",
+                    "model": "stepfun/step-3.5-flash:free",
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 7,
+                        "total_tokens": 18,
+                        "cost": 0.0042,
+                        "is_byok": False,
+                    },
+                },
+            )
+
+    monkeypatch.setattr("runtime.model_backend.httpx.Client", _FakeClient)
+
+    backend = OpenRouterBackend(
+        api_key="test-key",
+        model="openrouter/free",
+        max_retries=0,
+        event_logger=emitted.append,
+    )
+    result = backend.generate(
+        messages=[
+            {"role": "system", "content": "prompt"},
+            {"role": "user", "content": "task"},
+        ]
+    )
+
+    assert result.assistant_text == "ok"
+    usage_events = [line for line in emitted if line.startswith("api_usage ")]
+    assert len(usage_events) == 1
+    usage_line = usage_events[0]
+    assert "response_id=gen-123" in usage_line
+    assert "prompt_tokens=11" in usage_line
+    assert "completion_tokens=7" in usage_line
+    assert "total_tokens=18" in usage_line
+    assert "cost_usd=0.0042" in usage_line

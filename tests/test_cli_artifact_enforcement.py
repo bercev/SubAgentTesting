@@ -1,7 +1,9 @@
 import json
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
+import typer
 
 import scripts.cli as cli
 import runtime.eval_service as eval_service
@@ -187,6 +189,113 @@ def test_run_service_quiet_suppresses_per_task_logs(monkeypatch, tmp_path: Path,
 def test_cli_run_verbose_option_defaults_to_quiet():
     verbose_option = cli.run.__defaults__[-1]
     assert getattr(verbose_option, "default", None) is False
+
+
+def test_cli_run_prints_post_run_summary_by_default(monkeypatch, tmp_path: Path, capsys):
+    run_root = tmp_path / "artifacts" / "2026-02-24_120000"
+    run_log_path = run_root / "run.log"
+    manifest_path = run_root / "manifest.json"
+
+    fake_run_outcome = run_service.RunOutcome(
+        run_id="2026-02-24_120000",
+        benchmark_name="swebench_verified",
+        split_name="test",
+        mode_name="patch_only",
+        tasks_total=1,
+        valid_artifacts=1,
+        invalid_artifacts=0,
+        model_name_or_path="openrouter/free",
+        predictions_path=run_root / "predictions.jsonl",
+        manifest_path=manifest_path,
+        run_log_path=run_log_path,
+        manifest_payload={},
+    )
+
+    monkeypatch.setattr(cli, "load_run_config", lambda _: object())
+    monkeypatch.setattr(cli, "execute_run", lambda **_kwargs: fake_run_outcome)
+    monkeypatch.setattr(
+        cli,
+        "execute_run_log_summary",
+        lambda **_kwargs: SimpleNamespace(
+            terminal_lines=[
+                "Post-run summary: run_id=2026-02-24_120000",
+                "OpenRouter cost: total=$0.001000",
+            ],
+            manifest_path=manifest_path,
+        ),
+    )
+
+    cli.run(agent="a.yaml", run_config="r.yaml")
+
+    out = capsys.readouterr().out
+    assert "Post-run summary: run_id=2026-02-24_120000" in out
+    assert "OpenRouter cost: total=$0.001000" in out
+    assert "Manifest updated with run_log_summary:" in out
+
+
+def test_cli_run_can_skip_post_run_summary(monkeypatch, tmp_path: Path, capsys):
+    run_root = tmp_path / "artifacts" / "2026-02-24_120000"
+    fake_run_outcome = run_service.RunOutcome(
+        run_id="2026-02-24_120000",
+        benchmark_name="swebench_verified",
+        split_name="test",
+        mode_name="patch_only",
+        tasks_total=1,
+        valid_artifacts=1,
+        invalid_artifacts=0,
+        model_name_or_path="openrouter/free",
+        predictions_path=run_root / "predictions.jsonl",
+        manifest_path=run_root / "manifest.json",
+        run_log_path=run_root / "run.log",
+        manifest_payload={},
+    )
+
+    called = {"summary": 0}
+
+    monkeypatch.setattr(cli, "load_run_config", lambda _: object())
+    monkeypatch.setattr(cli, "execute_run", lambda **_kwargs: fake_run_outcome)
+    monkeypatch.setattr(
+        cli,
+        "execute_run_log_summary",
+        lambda **_kwargs: called.__setitem__("summary", called["summary"] + 1),
+    )
+
+    cli.run(agent="a.yaml", run_config="r.yaml", summary=False)
+
+    out = capsys.readouterr().out
+    assert "Post-run summary:" not in out
+    assert called["summary"] == 0
+
+
+def test_cli_summarize_run_prints_summary_and_updates_manifest(monkeypatch, tmp_path: Path, capsys):
+    run_log_path = tmp_path / "artifacts" / "2026-02-24_120000" / "run.log"
+    run_log_path.parent.mkdir(parents=True)
+    run_log_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli,
+        "execute_run_log_summary",
+        lambda **_kwargs: SimpleNamespace(
+            terminal_lines=["Post-run summary: run_id=2026-02-24_120000"],
+            manifest_path=run_log_path.parent / "manifest.json",
+        ),
+    )
+
+    cli.summarize_run(run_log=str(run_log_path))
+
+    out = capsys.readouterr().out
+    assert "Post-run summary: run_id=2026-02-24_120000" in out
+    assert "Manifest updated with run_log_summary:" in out
+
+
+def test_cli_summarize_run_invalid_path_maps_to_bad_parameter(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "execute_run_log_summary",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("bad run log path")),
+    )
+    with pytest.raises(typer.BadParameter):
+        cli.summarize_run(run_log="artifacts/invalid/run.log")
 
 
 def test_run_service_verbose_prints_per_task_logs(monkeypatch, tmp_path: Path, capsys):

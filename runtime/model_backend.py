@@ -210,6 +210,7 @@ class OpenRouterBackend(ModelBackend):
                         f" attempt={attempt_no}/{self.max_retries + 1}"
                         " parsed_type=dict"
                     )
+                    self._emit_usage_log(data, attempt_no=attempt_no, total_attempts=self.max_retries + 1)
                     break
                 if attempt >= self.max_retries:
                     raise ValueError("OpenRouter returned non-dict JSON response")
@@ -315,6 +316,51 @@ class OpenRouterBackend(ModelBackend):
             self.event_logger(message)
         except Exception:
             return
+
+    def _emit_usage_log(self, data: Dict[str, Any], *, attempt_no: int, total_attempts: int) -> None:
+        """Emit compact usage/cost diagnostics for OpenRouter responses when available."""
+
+        usage = data.get("usage")
+        if not isinstance(usage, dict):
+            return
+
+        fields = [
+            "api_usage",
+            "provider=openrouter",
+            f"model={self.model}",
+            f"attempt={attempt_no}/{total_attempts}",
+        ]
+
+        response_id = data.get("id")
+        if isinstance(response_id, str) and response_id:
+            fields.append(f"response_id={response_id}")
+
+        upstream_provider = data.get("provider")
+        if isinstance(upstream_provider, str) and upstream_provider:
+            fields.append(f"upstream_provider={upstream_provider}")
+
+        upstream_model = data.get("model")
+        if isinstance(upstream_model, str) and upstream_model:
+            fields.append(f"upstream_model={upstream_model}")
+
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                fields.append(f"{key}={int(value)}")
+
+        cost_value = usage.get("cost")
+        if isinstance(cost_value, bool):
+            cost_value = None
+        if isinstance(cost_value, (int, float)):
+            fields.append(f"cost_usd={float(cost_value):.12g}")
+
+        is_byok = usage.get("is_byok")
+        if isinstance(is_byok, bool):
+            fields.append(f"is_byok={str(is_byok)}")
+
+        self._emit_log(" ".join(fields))
 
     def _sleep_before_retry(self, attempt: int) -> float:
         """Sleep using bounded exponential backoff with jitter and return wait seconds."""

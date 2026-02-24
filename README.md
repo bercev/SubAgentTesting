@@ -132,11 +132,12 @@ output:
 
 ## Architecture
 
-- `scripts/cli.py`: thin Typer entrypoint (`agent run/predict/eval/list`) and terminal output only.
+- `scripts/cli.py`: thin Typer entrypoint (`agent run/predict/eval/summarize-run/list`) and terminal output only.
 - `runtime/config_loader.py`: config read + normalization + typed validation.
 - `runtime/backend_factory.py`: backend construction from agent spec.
 - `runtime/run_service.py`: task loop orchestration, prediction writes, diagnostics, manifest/run log writes.
 - `runtime/eval_service.py`: evaluator execution, report metrics parse, manifest updates.
+- `runtime/log_summary_service.py`: post-run `run.log` parsing, terminal summary formatting, manifest `run_log_summary` updates.
 - `runtime/metrics.py`: report metric parsing and formatting.
 - `runtime/manifest_store.py`: stable manifest and run-log read/write helpers.
 - `benchmarks/contracts.py`: adapter/evaluator interfaces.
@@ -188,6 +189,12 @@ agent eval \
   --run-config profiles/runs/default.yaml
 ```
 
+Recompute a post-run log summary (also updates manifest):
+
+```bash
+agent summarize-run artifacts/<run_id>/run.log
+```
+
 ## Outputs
 
 Predictions are written to:
@@ -221,6 +228,7 @@ artifacts/<run_id>/manifest.json
 ```
 
 `agent run` / `agent predict` are quiet by default for per-task lines. Use `--verbose` to show per-task output.
+They now also print a post-run summary by default; use `--no-summary` to skip it.
 `agent eval` remains verbose by default; use `--quiet` to only print harness output on failure.
 
 Patch outputs are pass-through: `model_patch` keeps raw model output even when patch diagnostics mark it invalid.
@@ -228,9 +236,17 @@ Patch outputs are pass-through: `model_patch` keeps raw model output even when p
 Quiet mode examples:
 
 ```bash
-agent run --quiet --agent profiles/agents/openrouter_free.yaml --run-config profiles/runs/default.yaml --mode patch_only --selector 10
+agent run --quiet --no-summary --agent profiles/agents/openrouter_free.yaml --run-config profiles/runs/default.yaml --mode patch_only --selector 10
 agent eval --quiet artifacts/<run_id>/predictions.jsonl --run-config profiles/runs/default.yaml
 ```
+
+Run-log summary data is persisted under:
+
+```text
+artifacts/<run_id>/manifest.json -> run_log_summary
+```
+
+OpenRouter cost estimates in `run_log_summary` come from logged response `usage` fields and may be partial for older runs that predate the `api_usage` log event.
 
 ## Accuracy Summary
 
