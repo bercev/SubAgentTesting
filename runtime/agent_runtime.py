@@ -45,7 +45,8 @@ class AgentRuntime:
     def run(
         self,
         task: BenchmarkTask,
-        prompt: str,
+        system_prompt: str,
+        initial_user_message: str,
         tool_schemas: Optional[List[Dict[str, Any]]],
         decoding_defaults: Optional[Dict[str, Any]] = None,
     ) -> AgentResult:
@@ -53,8 +54,8 @@ class AgentRuntime:
 
         start = time.monotonic()
         messages: List[Dict[str, Any]] = [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": task.instruction},
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": initial_user_message},
         ]
         terminated = False
         final_artifact = ""

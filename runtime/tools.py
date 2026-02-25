@@ -4,7 +4,7 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 
 @dataclass
@@ -15,6 +15,16 @@ class ToolContext:
     submit_callback: Optional[callable] = None
     bash_timeout_s: int = 60
     output_truncate: int = 4000
+    search_exclude_dirnames: Tuple[str, ...] = (
+        ".git",
+        ".venv",
+        "artifacts",
+        "logs",
+        "summaries",
+        "__pycache__",
+        ".pytest_cache",
+        "portable_agent_runner.egg-info",
+    )
 
 
 class ToolRegistry:
@@ -183,7 +193,7 @@ class ToolRegistry:
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
         if not target.exists():
-            return {"error": "path not found"}
+            return {"error": "path not found", "path": path, "workspace_root": str(root)}
         entries = []
         for entry in sorted(target.iterdir()):
             entries.append({
@@ -199,7 +209,7 @@ class ToolRegistry:
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
         if not target.is_file():
-            return {"error": "file not found"}
+            return {"error": "file not found", "path": path, "workspace_root": str(root)}
         with target.open("r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
         start = max(1, start_line)
@@ -213,11 +223,18 @@ class ToolRegistry:
         root = self._workspace_root()
         pattern = re.compile(query)
         matches = []
+        excluded = set(self.ctx.search_exclude_dirnames)
         for path in root.glob(glob):
+            try:
+                rel_parts = path.relative_to(root).parts
+            except ValueError:
+                continue
+            if any(part in excluded for part in rel_parts):
+                continue
             if path.is_file():
                 try:
                     content = path.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
+                except (UnicodeDecodeError, OSError):
                     continue
                 for m in pattern.finditer(content):
                     line_no = content[: m.start()].count("\n") + 1

@@ -181,6 +181,8 @@ agent run \
   --split test
 ```
 
+Important: `tools_enabled` requires a tool-ready local repository workspace. For SWE-bench, configure `benchmark.data_source=local` and `benchmark.data_root`, and place repo checkouts under `<data_root>/<repo>`. HF-only task loading is fine for `patch_only`, but `tools_enabled` now fails fast before any API call when no local workspace is available.
+
 Evaluate predictions:
 
 ```bash
@@ -516,6 +518,7 @@ Notes:
 
 Tool allowlist behavior notes:
 - `skills` serve two purposes: prompt injection and skill-derived allowed-tool declarations.
+- If `skills` are configured, the prompt template/file must include the `{skills}` placeholder (hard validation).
 - In `tools_enabled` mode, runtime uses the intersection of skill-allowed tools and agent `tools` (when `tools` is present).
 - If `tools` is omitted and no skills declare tools, runtime falls back to the full tool registry in `tools_enabled` mode (legacy-compatible behavior).
 - In `patch_only` mode, runtime ignores agent `tools` and exposes only the `submit` termination tool.

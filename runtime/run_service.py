@@ -14,6 +14,7 @@ from runtime.config_loader import apply_run_overrides
 from runtime.config_models import RunConfig
 from runtime.manifest_store import append_log, manifest_path, new_run_id, now_iso, write_manifest
 from runtime.metrics import zero_eval_metrics
+from runtime.prompt_messages import build_initial_user_message
 from runtime.tool_quality import (
     build_run_summary,
     build_task_summary,
@@ -135,17 +136,29 @@ def execute_run(
     ) as telemetry_file:
         for task in tasks:
             # Rebuild tooling/runtime per task so workspace context stays isolated.
-            workspace_root = adapter.workspace_root_for_task(task)
+            workspace = adapter.workspace_context_for_task(task)
             submitted_artifact: Dict[str, str] = {}
             append_log(
                 run_log_path,
-                f"task={task.task_id} task_start workspace_root={workspace_root}",
+                f"task={task.task_id} task_start workspace_root={workspace.workspace_root}",
+            )
+            append_log(
+                run_log_path,
+                (
+                    f"task={task.task_id} workspace_context "
+                    f"workspace_root={workspace.workspace_root} "
+                    f"workspace_kind={workspace.workspace_kind} "
+                    f"workspace_exists={workspace.workspace_exists} "
+                    f"tools_ready={workspace.tools_ready} "
+                    f"repo={workspace.repo or ''} "
+                    f"reason={_preview_text_for_log(workspace.reason or '', limit=None)}"
+                ),
             )
 
             def _submit_callback(artifact: str):
                 submitted_artifact["artifact"] = artifact
 
-            tool_ctx = ToolContext(workspace_root=workspace_root, submit_callback=_submit_callback)
+            tool_ctx = ToolContext(workspace_root=workspace.workspace_root, submit_callback=_submit_callback)
             tool_registry = ToolRegistry(tool_ctx)
 
             def _api_log(line: str, task_id: str = task.task_id) -> None:
@@ -163,15 +176,21 @@ def execute_run(
                     source="model_backend.py",
                 )
 
-            backend = build_backend(
-                spec.backend,
-                event_logger=_api_log,
-                full_log_previews=full_log_previews,
-            )
             if mode_name == "patch_only":
                 allowed = {"submit"}
                 tool_schemas = None
             else:
+                if not workspace.tools_ready:
+                    raise ValueError(
+                        "tools_enabled task workspace is not tool-ready: "
+                        f"task_id={task.task_id} "
+                        f"workspace_root={workspace.workspace_root} "
+                        f"workspace_kind={workspace.workspace_kind} "
+                        f"reason={workspace.reason or 'unspecified'} "
+                        "Remediation: configure a local benchmark workspace with "
+                        "benchmark.data_source=local and benchmark.data_root containing repo checkouts "
+                        "under <data_root>/<repo>."
+                    )
                 if allowed_tools is None:
                     allowed = {
                         schema.get("function", {}).get("name") for schema in tool_registry.schemas
@@ -180,6 +199,11 @@ def execute_run(
                     allowed = allowed_tools
                 tool_schemas = _filter_tool_schemas(tool_registry, allowed)
 
+            backend = build_backend(
+                spec.backend,
+                event_logger=_api_log,
+                full_log_previews=full_log_previews,
+            )
             runtime = AgentRuntime(
                 backend=backend,
                 tool_registry=tool_registry,
@@ -190,9 +214,11 @@ def execute_run(
                 mode_name=mode_name,
             )
 
+            initial_user_message = build_initial_user_message(task, workspace, mode_name)
             result = runtime.run(
                 task=task,
-                prompt=prompt,
+                system_prompt=prompt,
+                initial_user_message=initial_user_message,
                 tool_schemas=tool_schemas,
                 decoding_defaults=spec.decoding_defaults,
             )

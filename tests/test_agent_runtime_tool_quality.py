@@ -74,7 +74,7 @@ def test_agent_runtime_records_successful_call_and_submit_termination():
         mode_name="tools_enabled",
     )
 
-    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
     payload = result.metadata["tool_quality_runtime"]
     events = payload["events"]
 
@@ -113,7 +113,7 @@ def test_agent_runtime_records_not_allowed_tool_call():
         mode_name="tools_enabled",
     )
 
-    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
     payload = result.metadata["tool_quality_runtime"]
     events = payload["events"]
 
@@ -148,7 +148,7 @@ def test_agent_runtime_allows_tools_when_allowlist_is_none():
         mode_name="tools_enabled",
     )
 
-    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
     events = result.metadata["tool_quality_runtime"]["events"]
 
     assert len(events) == 1
@@ -179,7 +179,7 @@ def test_agent_runtime_denies_tools_when_allowlist_is_empty_set():
         mode_name="tools_enabled",
     )
 
-    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
     events = result.metadata["tool_quality_runtime"]["events"]
 
     assert len(events) == 1
@@ -210,7 +210,7 @@ def test_agent_runtime_marks_nonzero_returncode_tool_result_as_failure():
         mode_name="tools_enabled",
     )
 
-    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
     payload = result.metadata["tool_quality_runtime"]
     events = payload["events"]
 
@@ -241,7 +241,7 @@ def test_agent_runtime_records_tool_budget_exhaustion_exit_reason():
         mode_name="tools_enabled",
     )
 
-    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
     payload = result.metadata["tool_quality_runtime"]
 
     assert result.metadata["terminated"] is False
@@ -265,7 +265,7 @@ def test_agent_runtime_records_wall_time_exhaustion_exit_reason(monkeypatch):
     clock = iter([10.0, 11.0])
     monkeypatch.setattr("runtime.agent_runtime.time.monotonic", lambda: next(clock))
 
-    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
     payload = result.metadata["tool_quality_runtime"]
 
     assert result.metadata["terminated"] is False
@@ -298,7 +298,7 @@ def test_agent_runtime_continues_after_tool_execution_exception():
         mode_name="tools_enabled",
     )
 
-    result = runtime.run(task=_task(), prompt="prompt", tool_schemas=[], decoding_defaults=None)
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
     payload = result.metadata["tool_quality_runtime"]
     events = payload["events"]
 

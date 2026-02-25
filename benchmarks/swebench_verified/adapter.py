@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Mapping, Optional, cast
 
 from runtime.config_models import RunConfig
 from runtime.schemas import BenchmarkTask
+from runtime.task_context import TaskWorkspaceContext
 
 
 class SWEbenchVerifiedAdapter:
@@ -109,15 +110,63 @@ class SWEbenchVerifiedAdapter:
             expected_output_type="patch",
         )
 
-    def workspace_root_for_task(self, task: BenchmarkTask) -> Path:
-        """Resolve the workspace root used by tools for a given task."""
+    def workspace_context_for_task(self, task: BenchmarkTask) -> TaskWorkspaceContext:
+        """Resolve task workspace/tool readiness context for SWE-bench tasks."""
+
+        repo = task.resources.get("repo") if task.resources else None
+        repo_name = repo if isinstance(repo, str) and repo else None
 
         if self.data_root:
-            repo = task.resources.get("repo") if task.resources else None
-            if isinstance(repo, str) and repo:
-                return self.data_root / repo
-            return self.data_root
-        return Path(".")
+            root = self.data_root
+            if repo_name:
+                repo_path = root / repo_name
+                if repo_path.exists():
+                    return TaskWorkspaceContext(
+                        workspace_root=repo_path,
+                        workspace_exists=True,
+                        tools_ready=True,
+                        workspace_kind="repo_checkout",
+                        reason=None,
+                        repo=repo_name,
+                        dataset_name=self.dataset_name,
+                    )
+                return TaskWorkspaceContext(
+                    workspace_root=root,
+                    workspace_exists=root.exists(),
+                    tools_ready=False,
+                    workspace_kind="dataset_root",
+                    reason=(
+                        f"Missing repo checkout for task repo '{repo_name}' under data_root: {repo_path}. "
+                        "Populate local benchmark repos under benchmark.data_root/<repo>."
+                    ),
+                    repo=repo_name,
+                    dataset_name=self.dataset_name,
+                    metadata={"expected_repo_path": str(repo_path)},
+                )
+            return TaskWorkspaceContext(
+                workspace_root=root,
+                workspace_exists=root.exists(),
+                tools_ready=root.exists(),
+                workspace_kind="dataset_root",
+                reason=None if root.exists() else f"Configured data_root does not exist: {root}",
+                repo=None,
+                dataset_name=self.dataset_name,
+            )
+
+        runner_root = Path(".")
+        return TaskWorkspaceContext(
+            workspace_root=runner_root,
+            workspace_exists=runner_root.exists(),
+            tools_ready=False,
+            workspace_kind="runner_root",
+            reason=(
+                "HF-backed SWE-bench tasks do not provide local repository workspaces. "
+                "For tools_enabled runs, configure benchmark.data_source=local and benchmark.data_root "
+                "with repo checkouts under <data_root>/<repo>."
+            ),
+            repo=repo_name,
+            dataset_name=self.dataset_name,
+        )
 
     def get_evaluator(self, config: RunConfig):
         """Return the benchmark-specific evaluator implementation."""

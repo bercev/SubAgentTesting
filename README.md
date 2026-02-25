@@ -61,6 +61,8 @@ agent run \
   --selector 10
 ```
 
+`tools_enabled` runs require a local tool-ready repository workspace for the task dataset (for SWE-bench: use `benchmark.data_source=local` and set `benchmark.data_root` with repo checkouts under `<data_root>/<repo>`). HF-only task loading is suitable for `patch_only` runs but will now fail fast in `tools_enabled`.
+
 Pick the latest predictions file:
 
 ```bash

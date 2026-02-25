@@ -5,7 +5,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 import yaml
 
 from skills.loader import load_skills
-from runtime.schemas import BenchmarkTask
 
 
 @dataclass
@@ -61,7 +60,10 @@ class AgentSpecLoader:
         """Render profile prompt template by injecting loaded skills text."""
 
         base = spec.prompt_template
-        # Simple placeholder replacement
+        if spec.skills and "{skills}" not in base:
+            raise ValueError(
+                "Prompt template is missing required `{skills}` placeholder while skills are configured"
+            )
         base = base.replace("{skills}", skills_text)
         return base
 
@@ -151,16 +153,9 @@ class AgentSpecLoader:
             return None
         return explicit
 
-
 def build_allowed_tools_from_skills(skill_names: List[str], base_dir: Path) -> Set[str]:
     """Resolve allowed tools set from configured skill directories."""
 
     skill_dirs = [base_dir / "skills" / s for s in skill_names]
     _, allowed = load_skills(skill_dirs)
     return allowed
-
-
-def format_task_user_message(task: BenchmarkTask) -> str:
-    """Return task instruction payload for user-role message content."""
-
-    return task.instruction

@@ -14,7 +14,7 @@ def _is_adapter_candidate(value: Any) -> bool:
     required_methods = (
         "from_config",
         "load_tasks",
-        "workspace_root_for_task",
+        "workspace_context_for_task",
         "to_prediction_record",
         "get_evaluator",
     )

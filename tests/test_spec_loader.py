@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from agents.spec_loader import AgentSpecLoader
 
 
@@ -126,3 +128,27 @@ decoding_defaults: {}
 
     assert spec.tools is None
     assert allowed is None
+
+
+def test_agent_spec_skills_require_prompt_placeholder(tmp_path: Path):
+    skills_dir = tmp_path / "skills" / "s1"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("Allowed Tools:\n- submit\n")
+
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi"
+tools: []
+skills: [s1]
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    with pytest.raises(ValueError, match="missing required `\\{skills\\}` placeholder"):
+        loader.load(agent_yaml)

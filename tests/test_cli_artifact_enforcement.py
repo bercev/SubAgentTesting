@@ -11,10 +11,15 @@ import runtime.run_service as run_service
 from agents.spec_loader import AgentSpec
 from runtime.config_loader import normalize_run_config
 from runtime.schemas import AgentResult, BenchmarkTask
+from runtime.task_context import TaskWorkspaceContext
 
 
 class _FakeAdapter:
     benchmark_name = "swebench_verified"
+    _workspace_root = Path(".")
+    _workspace_tools_ready = True
+    _workspace_kind = "repo_checkout"
+    _workspace_reason = None
 
     def __init__(self, task: BenchmarkTask):
         self._task = task
@@ -32,8 +37,18 @@ class _FakeAdapter:
     def load_tasks(self, split: str, selector: int | None = None):
         return [self._task]
 
-    def workspace_root_for_task(self, task: BenchmarkTask) -> Path:
-        return Path(".")
+    def workspace_context_for_task(self, task: BenchmarkTask) -> TaskWorkspaceContext:
+        repo = task.resources.get("repo") if task.resources else None
+        repo_name = repo if isinstance(repo, str) else None
+        return TaskWorkspaceContext(
+            workspace_root=self._workspace_root,
+            workspace_exists=True,
+            tools_ready=self._workspace_tools_ready,
+            workspace_kind=self._workspace_kind,
+            reason=self._workspace_reason,
+            repo=repo_name,
+            dataset_name="SWE-bench/SWE-bench_Verified",
+        )
 
     def to_prediction_record(
         self,
@@ -76,6 +91,9 @@ def _run_once(
     runtime_init_capture: dict | None = None,
     full_log_previews: bool = False,
     build_backend_capture: dict | None = None,
+    workspace_tools_ready: bool = True,
+    workspace_kind: str = "repo_checkout",
+    workspace_reason: str | None = None,
 ):
     run_config = normalize_run_config(
         {
@@ -114,12 +132,23 @@ def _run_once(
         decoding_defaults={},
     )
 
+    _FakeAdapter._workspace_root = Path(".")
+    _FakeAdapter._workspace_tools_ready = workspace_tools_ready
+    _FakeAdapter._workspace_kind = workspace_kind
+    _FakeAdapter._workspace_reason = workspace_reason
+
     class _FakeRuntime:
         def __init__(self, *args, **kwargs):
             if runtime_init_capture is not None:
                 runtime_init_capture["kwargs"] = kwargs
 
-        def run(self, task, prompt, tool_schemas, decoding_defaults=None):
+        def run(self, task, system_prompt, initial_user_message, tool_schemas, decoding_defaults=None):
+            if runtime_init_capture is not None:
+                runtime_init_capture["run_args"] = {
+                    "system_prompt": system_prompt,
+                    "initial_user_message": initial_user_message,
+                    "tool_schemas": tool_schemas,
+                }
             metadata = {"terminated": True, "repo": "astropy/astropy"}
             if runtime_tool_payload is not None:
                 metadata["tool_quality_runtime"] = runtime_tool_payload
@@ -404,6 +433,37 @@ def test_run_service_writes_run_log_file(monkeypatch, tmp_path: Path):
     assert "Starting run:" in content
     assert "Run summary:" in content
     assert "artifact_valid=" in content
+    assert "workspace_context" in content
+
+
+def test_run_service_tools_enabled_fails_fast_when_workspace_not_tool_ready(monkeypatch, tmp_path: Path):
+    backend_captured: dict = {}
+    with pytest.raises(ValueError, match="benchmark.data_source=local"):
+        _run_once(
+            monkeypatch,
+            tmp_path,
+            raw_artifact="",
+            mode="tools_enabled",
+            workspace_tools_ready=False,
+            workspace_kind="runner_root",
+            workspace_reason="HF-backed tasks do not provide local repo workspaces",
+            build_backend_capture=backend_captured,
+        )
+
+    assert backend_captured == {}
+
+
+def test_run_service_patch_only_allows_non_tool_ready_workspace(monkeypatch, tmp_path: Path):
+    record, _ = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="diff --git a/a b/a\n",
+        mode="patch_only",
+        workspace_tools_ready=False,
+        workspace_kind="runner_root",
+        workspace_reason="HF-backed tasks do not provide local repo workspaces",
+    )
+    assert record["instance_id"] == "astropy__astropy-12907"
 
 
 def test_run_service_artifact_preview_truncates_by_default(monkeypatch, tmp_path: Path):
@@ -440,6 +500,24 @@ def test_run_service_passes_full_log_previews_to_build_backend(monkeypatch, tmp_
         build_backend_capture=captured,
     )
     assert captured["kwargs"]["full_log_previews"] is True
+
+
+def test_run_service_builds_tools_mode_initial_user_message_with_workspace_context(
+    monkeypatch, tmp_path: Path
+):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        verbose=False,
+        mode="tools_enabled",
+        runtime_init_capture=captured,
+    )
+    initial_user_message = captured["run_args"]["initial_user_message"]
+    assert "Fix issue" in initial_user_message
+    assert "<workspace_context>" in initial_user_message
+    assert "tools_ready: true" in initial_user_message
 
 
 def test_run_service_run_log_uses_structured_prefix(monkeypatch, tmp_path: Path):

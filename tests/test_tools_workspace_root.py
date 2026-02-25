@@ -58,3 +58,43 @@ def test_bash_tool_prefers_cmd_over_command_alias(monkeypatch, tmp_path: Path):
 
     assert result["returncode"] == 0
     assert result["output"] == "cmd"
+
+
+def test_workspace_list_missing_path_includes_context(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+
+    result = registry.workspace_list("missing-dir")
+
+    assert result["error"] == "path not found"
+    assert result["path"] == "missing-dir"
+    assert result["workspace_root"] == str(tmp_path.resolve())
+
+
+def test_workspace_open_missing_file_includes_context(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+
+    result = registry.workspace_open("missing.txt")
+
+    assert result["error"] == "file not found"
+    assert result["path"] == "missing.txt"
+    assert result["workspace_root"] == str(tmp_path.resolve())
+
+
+def test_workspace_search_skips_default_excluded_directories(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "artifacts").mkdir()
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / "src" / "good.py").write_text("TOKEN_MATCH = 1\n", encoding="utf-8")
+    (tmp_path / "artifacts" / "noise.txt").write_text("TOKEN_MATCH = 2\n", encoding="utf-8")
+    (tmp_path / ".venv" / "noise.py").write_text("TOKEN_MATCH = 3\n", encoding="utf-8")
+
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    result = registry.workspace_search("TOKEN_MATCH")
+
+    files = [row["file"] for row in result["matches"]]
+    assert "src/good.py" in files
+    assert "artifacts/noise.txt" not in files
+    assert ".venv/noise.py" not in files

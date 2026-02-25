@@ -10,6 +10,7 @@ import scripts.cli as cli
 import runtime.eval_service as eval_service
 from runtime.config_loader import normalize_run_config
 from runtime.eval_service import EvalOutcome
+from runtime.task_context import TaskWorkspaceContext
 
 
 class _FakeAdapter:
@@ -29,7 +30,7 @@ class _FakeAdapter:
     def load_tasks(self, split, selector):
         raise NotImplementedError
 
-    def workspace_root_for_task(self, task):
+    def workspace_context_for_task(self, task) -> TaskWorkspaceContext:
         raise NotImplementedError
 
     def to_prediction_record(self, *args, **kwargs):

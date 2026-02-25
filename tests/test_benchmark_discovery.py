@@ -8,6 +8,7 @@ import pytest
 from benchmarks.discovery import _is_adapter_candidate, discover_benchmark_adapters
 from benchmarks.registry import BenchmarkRegistry
 from runtime.schemas import BenchmarkTask
+from runtime.task_context import TaskWorkspaceContext
 
 
 class _ValidShapeAdapter:
@@ -20,8 +21,13 @@ class _ValidShapeAdapter:
     def load_tasks(self, split: str, selector: Optional[int]) -> list[BenchmarkTask]:
         return []
 
-    def workspace_root_for_task(self, task: BenchmarkTask) -> Path:
-        return Path(".")
+    def workspace_context_for_task(self, task: BenchmarkTask) -> TaskWorkspaceContext:
+        return TaskWorkspaceContext(
+            workspace_root=Path("."),
+            workspace_exists=True,
+            tools_ready=True,
+            workspace_kind="repo_checkout",
+        )
 
     def to_prediction_record(
         self,
