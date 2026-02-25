@@ -10,6 +10,8 @@ from runtime.tools import ToolRegistry
 class AgentRuntime:
     """Task execution loop that drives model generation and tool calls."""
 
+    MAX_TOOL_MESSAGE_CHARS = 12000
+
     def __init__(
         self,
         backend: ModelBackend,
@@ -41,6 +43,24 @@ class AgentRuntime:
         except Exception:
             serialized = str(payload)
         return len(serialized.encode("utf-8", errors="ignore"))
+
+    @classmethod
+    def _truncate_text(cls, text: str, limit: int) -> str:
+        """Truncate large tool payloads before appending them to model context."""
+
+        if len(text) <= limit:
+            return text
+        return text[:limit] + "...[truncated]"
+
+    @classmethod
+    def _tool_message_content(cls, payload: Any) -> str:
+        """Serialize tool results as JSON (with fallback) for consistent model parsing."""
+
+        try:
+            serialized = json.dumps(payload, ensure_ascii=False, default=str)
+        except Exception:
+            serialized = str(payload)
+        return cls._truncate_text(serialized, cls.MAX_TOOL_MESSAGE_CHARS)
 
     def run(
         self,
@@ -101,10 +121,16 @@ class AgentRuntime:
             messages.append(assistant_msg)
 
             if not result.tool_calls:
-                # Patch-only mode often terminates by returning final artifact text directly.
-                final_artifact = result.assistant_text
-                terminated = True
-                loop_exit_reason = "no_tool_calls"
+                if self.mode_name == "tools_enabled":
+                    # Tools-enabled mode must terminate via explicit submit(...).
+                    final_artifact = ""
+                    terminated = False
+                    loop_exit_reason = "no_tool_calls_without_submit"
+                else:
+                    # Patch-only mode often terminates by returning final artifact text directly.
+                    final_artifact = result.assistant_text
+                    terminated = True
+                    loop_exit_reason = "no_tool_calls"
                 break
 
             for idx, tc in enumerate(result.tool_calls):
@@ -189,7 +215,7 @@ class AgentRuntime:
                         "role": "tool",
                         "name": tc.name,
                         "tool_call_id": tool_call_ids[idx] if idx < len(tool_call_ids) else "unknown",
-                        "content": str(tool_result),
+                        "content": self._tool_message_content(tool_result),
                     }
                 )
                 if execution_exception is not None:

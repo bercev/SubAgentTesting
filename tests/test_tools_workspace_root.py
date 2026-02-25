@@ -37,7 +37,9 @@ def test_execute_returns_error_for_invalid_tool_argument_shape(monkeypatch, tmp_
 
     assert "error" in result
     assert "invalid arguments for workspace_open" in result["error"]
+    assert result.get("tool_name") == "workspace_open"
     assert result.get("provided_keys") == ["raw"]
+    assert result.get("expected_keys") == ["end_line", "path", "start_line"]
 
 
 def test_bash_tool_accepts_command_alias(monkeypatch, tmp_path: Path):
@@ -98,3 +100,41 @@ def test_workspace_search_skips_default_excluded_directories(monkeypatch, tmp_pa
     assert "src/good.py" in files
     assert "artifacts/noise.txt" not in files
     assert ".venv/noise.py" not in files
+
+
+def test_workspace_open_without_end_line_is_capped_and_paginates(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    content = "".join(f"line {i}\n" for i in range(1, 501))
+    (tmp_path / "big.txt").write_text(content, encoding="utf-8")
+
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    result = registry.workspace_open("big.txt")
+
+    assert result["start_line"] == 1
+    assert result["end_line"] == 250
+    assert result["total_lines"] == 500
+    assert result["truncated"] is True
+    assert result["clamped"] is False
+    assert result["next_start_line"] == 251
+    assert result["content"].startswith("line 1\n")
+    assert "line 250\n" in result["content"]
+    assert "line 251\n" not in result["content"]
+
+
+def test_workspace_open_clamps_oversized_explicit_range(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    content = "".join(f"row {i}\n" for i in range(1, 1001))
+    (tmp_path / "big.txt").write_text(content, encoding="utf-8")
+
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    result = registry.workspace_open("big.txt", start_line=10, end_line=999)
+
+    assert result["start_line"] == 10
+    assert result["end_line"] == 409
+    assert result["total_lines"] == 1000
+    assert result["clamped"] is True
+    assert result["truncated"] is True
+    assert result["next_start_line"] == 410
+    assert result["content"].startswith("row 10\n")
+    assert "row 409\n" in result["content"]
+    assert "row 410\n" not in result["content"]

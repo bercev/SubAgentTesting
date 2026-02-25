@@ -102,3 +102,75 @@ def test_workspace_context_local_mode_reports_missing_repo_checkout(tmp_path: Pa
     assert ctx.workspace_root == tmp_path
     assert ctx.reason is not None
     assert "Missing repo checkout" in ctx.reason
+
+
+def test_local_loader_repo_allowlist_filters_before_selector(tmp_path: Path):
+    split_path = tmp_path / "test.jsonl"
+    rows = [
+        {
+            "instance_id": "django__1",
+            "problem_statement": "Fix django issue",
+            "repo": "django/django",
+        },
+        {
+            "instance_id": "astropy__1",
+            "problem_statement": "Fix astropy issue 1",
+            "repo": "astropy/astropy",
+        },
+        {
+            "instance_id": "astropy__2",
+            "problem_statement": "Fix astropy issue 2",
+            "repo": "astropy/astropy",
+        },
+    ]
+    split_path.write_text(
+        "\n".join(__import__("json").dumps(row) for row in rows) + "\n",
+        encoding="utf-8",
+    )
+    adapter = SWEbenchVerifiedAdapter(
+        data_source="local",
+        data_root=str(tmp_path),
+        params={"repo_allowlist": ["astropy/astropy"]},
+    )
+
+    tasks = adapter.load_tasks(split="test", selector=5)
+
+    assert [t.task_id for t in tasks] == ["astropy__1", "astropy__2"]
+
+
+def test_hf_loader_repo_allowlist_filters_before_selector(monkeypatch):
+    captured = {"split": None}
+
+    class _FakeDataset:
+        def __iter__(self):
+            yield {
+                "instance_id": "django__1",
+                "problem_statement": "Fix django issue",
+                "repo": "django/django",
+            }
+            yield {
+                "instance_id": "astropy__1",
+                "problem_statement": "Fix astropy issue 1",
+                "repo": "astropy/astropy",
+            }
+            yield {
+                "instance_id": "astropy__2",
+                "problem_statement": "Fix astropy issue 2",
+                "repo": "astropy/astropy",
+            }
+
+    def _fake_load_dataset(dataset_name: str, split: str):
+        captured["split"] = split
+        return _FakeDataset()
+
+    monkeypatch.setattr("datasets.load_dataset", _fake_load_dataset)
+
+    adapter = SWEbenchVerifiedAdapter(
+        data_source="hf",
+        dataset_name="SWE-bench/SWE-bench_Verified",
+        params={"repo_allowlist": ["astropy/astropy"]},
+    )
+    tasks = adapter.load_tasks(split="test", selector=2)
+
+    assert captured["split"] == "test"
+    assert [t.task_id for t in tasks] == ["astropy__1", "astropy__2"]

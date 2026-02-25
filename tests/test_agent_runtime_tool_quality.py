@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from typing import Any, Dict, List
 
 from runtime.agent_runtime import AgentRuntime
@@ -15,6 +16,22 @@ class _SequenceBackend:
         if not self._responses:
             raise AssertionError("Unexpected generate() call with no remaining responses")
         return self._responses.pop(0)
+
+
+class _CapturingSequenceBackend(_SequenceBackend):
+    def __init__(self, responses: List[GenerationResult]) -> None:
+        super().__init__(responses)
+        self.calls: List[Dict[str, Any]] = []
+
+    def generate(self, messages, tools=None, decoding=None) -> GenerationResult:  # noqa: ANN001, ANN201
+        self.calls.append(
+            {
+                "messages": copy.deepcopy(messages),
+                "tools": copy.deepcopy(tools),
+                "decoding": copy.deepcopy(decoding),
+            }
+        )
+        return super().generate(messages, tools=tools, decoding=decoding)
 
 
 class _ToolRegistryStub:
@@ -117,8 +134,9 @@ def test_agent_runtime_records_not_allowed_tool_call():
     payload = result.metadata["tool_quality_runtime"]
     events = payload["events"]
 
-    assert result.metadata["terminated"] is True
-    assert payload["loop_exit_reason"] == "no_tool_calls"
+    assert result.metadata["terminated"] is False
+    assert result.final_artifact == ""
+    assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
     assert len(events) == 1
     assert events[0]["allowed"] is False
     assert events[0]["executed"] is False
@@ -302,10 +320,98 @@ def test_agent_runtime_continues_after_tool_execution_exception():
     payload = result.metadata["tool_quality_runtime"]
     events = payload["events"]
 
-    assert result.metadata["terminated"] is True
-    assert result.final_artifact.startswith("diff --git")
-    assert payload["loop_exit_reason"] == "no_tool_calls"
+    assert result.metadata["terminated"] is False
+    assert result.final_artifact == ""
+    assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
     assert len(events) == 1
     assert events[0]["tool_name"] == "workspace_open"
     assert events[0]["success"] is False
     assert events[0]["error_code"] == "execution_exception"
+
+
+def test_agent_runtime_tools_mode_requires_submit_to_finalize():
+    backend = _SequenceBackend([GenerationResult(assistant_text="diff --git a/a b/a", tool_calls=[])])
+    registry = _ToolRegistryStub({})
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools={"submit"},
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="tools_enabled",
+    )
+
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is False
+    assert result.final_artifact == ""
+    assert payload["termination_ack"] is False
+    assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
+
+
+def test_agent_runtime_patch_only_still_accepts_assistant_text_without_submit():
+    backend = _SequenceBackend([GenerationResult(assistant_text="diff --git a/a b/a", tool_calls=[])])
+    registry = _ToolRegistryStub({})
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools={"submit"},
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="patch_only",
+    )
+
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=None, decoding_defaults=None)
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is True
+    assert result.final_artifact == "diff --git a/a b/a"
+    assert payload["loop_exit_reason"] == "no_tool_calls"
+
+
+def test_agent_runtime_serializes_and_truncates_tool_results_in_tool_messages():
+    backend = _CapturingSequenceBackend(
+        [
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[ToolCall(name="workspace_open", arguments={"path": "x.py"})],
+            ),
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[ToolCall(name="submit", arguments={"final_artifact": ""})],
+            ),
+        ]
+    )
+    registry = _ToolRegistryStub(
+        {
+            "workspace_open": {
+                "content": "x" * 13050,
+                "start_line": 1,
+                "end_line": 1,
+                "truncated": True,
+            },
+            "submit": {"submitted": True},
+        }
+    )
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools={"workspace_open", "submit"},
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="tools_enabled",
+    )
+
+    runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
+
+    second_call_messages = backend.calls[1]["messages"]
+    tool_messages = [m for m in second_call_messages if m.get("role") == "tool"]
+    assert len(tool_messages) == 1
+    content = tool_messages[0]["content"]
+    assert content.startswith("{")
+    assert '"content"' in content
+    assert "...[truncated]" in content

@@ -58,6 +58,8 @@ class SWEbenchVerifiedAdapter:
                     raise ValueError(
                         f"Invalid record type in {path}: expected object, got {type(record).__name__}"
                     )
+                if not self._record_matches_repo_filter(cast(Mapping[str, Any], record)):
+                    continue
                 task = self._record_to_task(cast(Mapping[str, Any], record))
                 tasks.append(task)
                 if selector and len(tasks) >= selector:
@@ -71,15 +73,49 @@ class SWEbenchVerifiedAdapter:
 
         ds = load_dataset(self.dataset_name, split=split)
         tasks: List[BenchmarkTask] = []
-        count = selector or len(ds)
-        for record in ds.select(range(min(count, len(ds)))):  # type: ignore[arg-type]
+        for record in ds:  # type: ignore[assignment]
             if not isinstance(record, dict):
                 raise ValueError(
                     f"Invalid record type in dataset split '{split}': "
                     f"expected object, got {type(record).__name__}"
                 )
+            if not self._record_matches_repo_filter(cast(Mapping[str, Any], record)):
+                continue
             tasks.append(self._record_to_task(cast(Mapping[str, Any], record)))
+            if selector and len(tasks) >= selector:
+                break
         return tasks
+
+    def _repo_allowlist(self) -> Optional[set[str]]:
+        """Return exact-match repo allowlist from benchmark params, if configured."""
+
+        raw = self.params.get("repo_allowlist")
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            value = raw.strip()
+            return {value} if value else set()
+        if isinstance(raw, list):
+            allowlist: set[str] = set()
+            for item in raw:
+                if isinstance(item, str) and item.strip():
+                    allowlist.add(item.strip())
+            return allowlist
+        return None
+
+    def _record_matches_repo_filter(self, record: Mapping[str, Any]) -> bool:
+        """Apply optional exact-match repo filtering using benchmark params."""
+
+        allowlist = self._repo_allowlist()
+        if allowlist is None:
+            return True
+        repo_raw = record.get("repo")
+        if not isinstance(repo_raw, str):
+            return False
+        repo = repo_raw.strip()
+        if not repo:
+            return False
+        return repo in allowlist
 
     def _record_to_task(self, record: Mapping[str, Any]) -> BenchmarkTask:
         """Convert one dataset row to a strict patch-generation benchmark task."""

@@ -27,6 +27,14 @@ else
   echo "SWE-bench already present at external/SWE-bench; skipping clone."
 fi
 
+if [ ! -d "data/swebench_repos/astropy/astropy/.git" ]; then
+  echo "Cloning Astropy repo into data/swebench_repos/astropy/astropy for tools-enabled runs..."
+  mkdir -p data/swebench_repos/astropy
+  git clone https://github.com/astropy/astropy.git data/swebench_repos/astropy/astropy
+else
+  echo "Astropy repo already present at data/swebench_repos/astropy/astropy; skipping clone."
+fi
+
 echo "Installing SWE-bench in the same environment..."
 uv pip install --python .venv/bin/python -e ./external/SWE-bench
 
@@ -36,3 +44,5 @@ echo "Next steps:"
 echo "  source .venv/bin/activate"
 echo "  agent run --agent profiles/agents/openrouter_free.yaml --run-config profiles/runs/default.yaml --mode patch_only --selector 10"
 echo "  agent eval artifacts/<run_id>/predictions.jsonl --run-config profiles/runs/default.yaml"
+echo "  # tools_enabled (HF tasks + local repos, astropy-only)"
+echo "  agent run --agent profiles/agents/gemini_2.5_flash_tools.yaml --run-config profiles/runs/swebench_tools_hf_astropy.yaml --mode tools_enabled --selector 3 --full-log-previews"

@@ -152,3 +152,15 @@ decoding_defaults: {}
     loader = AgentSpecLoader(tmp_path)
     with pytest.raises(ValueError, match="missing required `\\{skills\\}` placeholder"):
         loader.load(agent_yaml)
+
+
+def test_tools_profile_rendered_prompt_includes_tool_protocol_rules():
+    repo_root = Path(__file__).resolve().parents[1]
+    loader = AgentSpecLoader(repo_root)
+
+    _spec, prompt, _allowed = loader.load(repo_root / "profiles" / "agents" / "gemini_2.5_flash_tools.yaml")
+
+    assert "submit(final_artifact)" in prompt
+    assert "**/*.py" in prompt
+    assert "workspace_search only accepts query and optional glob" in prompt
+    assert "line-bounded workspace_open" in prompt
