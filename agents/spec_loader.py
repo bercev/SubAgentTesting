@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 import yaml
 
 from skills.loader import load_skills
-from runtime.schemas import BenchmarkTask
 
 
 @dataclass
@@ -15,7 +14,7 @@ class AgentSpec:
     name: str
     backend: Dict[str, Any]
     prompt_template: str
-    tools: List[Dict[str, Any]]
+    tools: Optional[List[str]]
     skills: List[str]
     tool_to_skill_map: Dict[str, List[str]]
     termination: Dict[str, Any]
@@ -30,32 +29,52 @@ class AgentSpecLoader:
 
         self.base_dir = base_dir
 
-    def load(self, path: Path) -> Tuple[AgentSpec, str, Set[str]]:
+    def load(
+        self,
+        path: Path,
+        *,
+        runtime_mode: Optional[Literal["patch_only", "tools_enabled"]] = None,
+    ) -> Tuple[AgentSpec, str, Optional[Set[str]]]:
         """Load agent spec, render final system prompt, and derive allowed tools."""
 
         with path.open("r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         prompt_template = self._resolve_prompt_template(data, path)
+        tools = self._normalize_tools_field(data["tools"]) if "tools" in data else None
         spec = AgentSpec(
             name=data["name"],
             backend=data["backend"],
             prompt_template=prompt_template,
-            tools=data.get("tools", []),
-            skills=data.get("skills", []),
+            tools=tools,
+            skills=self._normalize_skills_field(data.get("skills", [])),
             tool_to_skill_map=data.get("tool_to_skill_map", {}),
             termination=data.get("termination", {}),
             decoding_defaults=data.get("decoding_defaults", {}),
         )
         skill_dirs = [self.base_dir / "skills" / s for s in spec.skills]
-        skills_text, allowed_tools = load_skills(skill_dirs)
-        prompt = self.render_prompt(spec, skills_text)
+        skills_text, skill_allowed_tools = load_skills(skill_dirs)
+        allowed_tools = self._compute_effective_allowed_tools(
+            explicit_tools=spec.tools,
+            skill_allowed_tools=skill_allowed_tools,
+            has_skills=bool(spec.skills),
+        )
+        prompt = self.render_prompt(spec, skills_text, runtime_mode=runtime_mode)
         return spec, prompt, allowed_tools
 
-    def render_prompt(self, spec: AgentSpec, skills_text: str) -> str:
+    def render_prompt(
+        self,
+        spec: AgentSpec,
+        skills_text: str,
+        *,
+        runtime_mode: Optional[Literal["patch_only", "tools_enabled"]] = None,
+    ) -> str:
         """Render profile prompt template by injecting loaded skills text."""
 
         base = spec.prompt_template
-        # Simple placeholder replacement
+        if spec.skills and "{skills}" not in base and runtime_mode != "patch_only":
+            raise ValueError(
+                "Prompt template is missing required `{skills}` placeholder while skills are configured"
+            )
         base = base.replace("{skills}", skills_text)
         return base
 
@@ -94,6 +113,85 @@ class AgentSpecLoader:
             return candidate_agent_dir
         return self.base_dir / raw
 
+    def _normalize_tools_field(self, raw_tools: Any) -> List[str]:
+        """Normalize agent `tools` field to a deduplicated list of tool names."""
+
+        if raw_tools is None:
+            return []
+        if not isinstance(raw_tools, list):
+            raise ValueError("`tools` must be a list of tool names")
+
+        names: List[str] = []
+        for idx, item in enumerate(raw_tools):
+            name: Optional[str] = None
+            if isinstance(item, str):
+                name = item.strip()
+            elif isinstance(item, dict):
+                raw_name = item.get("name")
+                if isinstance(raw_name, str):
+                    name = raw_name.strip()
+            if not name:
+                raise ValueError(
+                    f"`tools[{idx}]` must be a non-empty string or object with non-empty `name`"
+                )
+            names.append(name)
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for name in names:
+            if name in seen:
+                continue
+            seen.add(name)
+            deduped.append(name)
+        return deduped
+
+    def _normalize_skills_field(self, raw_skills: Any) -> List[str]:
+        """Normalize agent `skills` field to a deduplicated list of skill names."""
+
+        if raw_skills is None:
+            return []
+        if not isinstance(raw_skills, list):
+            raise ValueError("`skills` must be a list of skill names")
+
+        names: List[str] = []
+        for idx, item in enumerate(raw_skills):
+            if item is None:
+                # Be forgiving for YAML entries like `-` that parse as null.
+                continue
+            if not isinstance(item, str):
+                raise ValueError(f"`skills[{idx}]` must be a string skill name")
+            name = item.strip()
+            if not name:
+                continue
+            names.append(name)
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for name in names:
+            if name in seen:
+                continue
+            seen.add(name)
+            deduped.append(name)
+        return deduped
+
+    def _compute_effective_allowed_tools(
+        self,
+        *,
+        explicit_tools: Optional[List[str]],
+        skill_allowed_tools: Set[str],
+        has_skills: bool,
+    ) -> Optional[Set[str]]:
+        """Compute effective runtime allowlist from explicit tools and skills."""
+
+        explicit = set(explicit_tools) if explicit_tools is not None else None
+        if has_skills:
+            if explicit is None:
+                return set(skill_allowed_tools)
+            return set(skill_allowed_tools).intersection(explicit)
+        if explicit is None:
+            # Backward-compatible tools_enabled behavior when neither skills nor tools constrain tools.
+            return None
+        return explicit
 
 def build_allowed_tools_from_skills(skill_names: List[str], base_dir: Path) -> Set[str]:
     """Resolve allowed tools set from configured skill directories."""
@@ -101,9 +199,3 @@ def build_allowed_tools_from_skills(skill_names: List[str], base_dir: Path) -> S
     skill_dirs = [base_dir / "skills" / s for s in skill_names]
     _, allowed = load_skills(skill_dirs)
     return allowed
-
-
-def format_task_user_message(task: BenchmarkTask) -> str:
-    """Return task instruction payload for user-role message content."""
-
-    return task.instruction

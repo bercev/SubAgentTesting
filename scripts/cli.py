@@ -10,6 +10,7 @@ from rich import print
 from benchmarks.registry import BenchmarkRegistry
 from runtime.config_loader import load_run_config
 from runtime.eval_service import execute_eval, format_metrics_lines
+from runtime.log_summary_service import execute_run_log_summary
 from runtime.run_service import execute_run
 
 app = typer.Typer(add_completion=False)
@@ -55,6 +56,16 @@ def run(
     selector: Optional[int] = typer.Option(None, help="Number of tasks override"),
     mode: Optional[str] = typer.Option(None, help="Mode override: patch_only or tools_enabled"),
     run_config: str = typer.Option("profiles/runs/default.yaml", help="Run config path"),
+    summary: bool = typer.Option(
+        True,
+        "--summary/--no-summary",
+        help="Show post-run summary and persist it into manifest by default.",
+    ),
+    full_log_previews: bool = typer.Option(
+        False,
+        "--full-log-previews/--compact-log-previews",
+        help="Write full run.log preview fields (payload/body/artifact/raw); can produce very large logs.",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose/--quiet",
@@ -74,6 +85,7 @@ def run(
         selector=selector,
         mode=mode,
         verbose=verbose,
+        full_log_previews=full_log_previews,
     )
 
     print(
@@ -93,6 +105,15 @@ def run(
     )
     print(f"Manifest written to {outcome.manifest_path}")
     print(f"Run log written to {outcome.run_log_path}")
+    if summary:
+        try:
+            summary_outcome = execute_run_log_summary(run_log_path=outcome.run_log_path)
+        except Exception as exc:
+            print(f"Post-run summary warning: failed to summarize run log ({exc})")
+        else:
+            for line in summary_outcome.terminal_lines:
+                print(line)
+            print(f"Manifest updated with run_log_summary: {summary_outcome.manifest_path}")
 
 
 @app.command()
@@ -101,6 +122,16 @@ def predict(
     split: Optional[str] = typer.Option(None),
     selector: Optional[int] = typer.Option(1),
     run_config: str = typer.Option("profiles/runs/default.yaml"),
+    summary: bool = typer.Option(
+        True,
+        "--summary/--no-summary",
+        help="Show post-run summary and persist it into manifest by default.",
+    ),
+    full_log_previews: bool = typer.Option(
+        False,
+        "--full-log-previews/--compact-log-previews",
+        help="Write full run.log preview fields (payload/body/artifact/raw); can produce very large logs.",
+    ),
     verbose: bool = typer.Option(
         False,
         "--verbose/--quiet",
@@ -116,8 +147,27 @@ def predict(
         selector=selector,
         mode="patch_only",
         run_config=run_config,
+        summary=summary,
+        full_log_previews=full_log_previews,
         verbose=verbose,
     )
+
+
+@app.command("summarize-run")
+def summarize_run(
+    run_log: str = typer.Argument("artifacts/<run_id>/run.log"),
+):
+    """Summarize a completed run log, print a readable report, and update manifest."""
+
+    run_log_path = Path(run_log)
+    try:
+        outcome = execute_run_log_summary(run_log_path=run_log_path)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc), param_hint="run_log") from exc
+
+    for line in outcome.terminal_lines:
+        print(line)
+    print(f"Manifest updated with run_log_summary: {outcome.manifest_path}")
 
 
 @app.command()

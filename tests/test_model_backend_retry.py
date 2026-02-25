@@ -141,3 +141,146 @@ def test_generate_does_not_extract_tool_calls_from_assistant_text(monkeypatch):
     )
     assert result.assistant_text.startswith("<tool_call")
     assert result.tool_calls == []
+
+
+def test_generate_emits_api_usage_event_when_usage_present(monkeypatch):
+    emitted: list[str] = []
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse(
+                200,
+                "",
+                payload={
+                    "id": "gen-123",
+                    "provider": "StepFun",
+                    "model": "stepfun/step-3.5-flash:free",
+                    "choices": [{"message": {"content": "ok"}}],
+                    "usage": {
+                        "prompt_tokens": 11,
+                        "completion_tokens": 7,
+                        "total_tokens": 18,
+                        "cost": 0.0042,
+                        "is_byok": False,
+                    },
+                },
+            )
+
+    monkeypatch.setattr("runtime.model_backend.httpx.Client", _FakeClient)
+
+    backend = OpenRouterBackend(
+        api_key="test-key",
+        model="openrouter/free",
+        max_retries=0,
+        event_logger=emitted.append,
+    )
+    result = backend.generate(
+        messages=[
+            {"role": "system", "content": "prompt"},
+            {"role": "user", "content": "task"},
+        ]
+    )
+
+    assert result.assistant_text == "ok"
+    usage_events = [line for line in emitted if line.startswith("api_usage ")]
+    assert len(usage_events) == 1
+    usage_line = usage_events[0]
+    assert "response_id=gen-123" in usage_line
+    assert "prompt_tokens=11" in usage_line
+    assert "completion_tokens=7" in usage_line
+    assert "total_tokens=18" in usage_line
+    assert "cost_usd=0.0042" in usage_line
+
+
+def test_backend_preview_logs_truncate_by_default(monkeypatch):
+    emitted: list[str] = []
+    request_tail = "REQTAIL"
+    response_tail = "RESPTAIL"
+    long_request = "r" * 2200 + request_tail
+    long_response = "s" * 1300 + response_tail
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse(
+                200,
+                long_response,
+                payload={"choices": [{"message": {"content": "ok"}}]},
+            )
+
+    monkeypatch.setattr("runtime.model_backend.httpx.Client", _FakeClient)
+    backend = OpenRouterBackend(
+        api_key="test-key",
+        model="openrouter/free",
+        max_retries=0,
+        event_logger=emitted.append,
+    )
+    backend.generate(messages=[{"role": "user", "content": long_request}])
+
+    request_line = next(line for line in emitted if line.startswith("api_request "))
+    response_line = next(line for line in emitted if line.startswith("api_response "))
+    assert "payload_preview=" in request_line
+    assert "body_preview=" in response_line
+    assert "...[truncated]" in request_line
+    assert "...[truncated]" in response_line
+    assert request_tail not in request_line
+    assert response_tail not in response_line
+
+
+def test_backend_preview_logs_full_when_enabled(monkeypatch):
+    emitted: list[str] = []
+    request_tail = "REQTAIL"
+    response_tail = "RESPTAIL"
+    long_request = "r" * 2200 + request_tail
+    long_response = "s" * 1300 + response_tail
+
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse(
+                200,
+                long_response,
+                payload={"choices": [{"message": {"content": "ok"}}]},
+            )
+
+    monkeypatch.setattr("runtime.model_backend.httpx.Client", _FakeClient)
+    backend = OpenRouterBackend(
+        api_key="test-key",
+        model="openrouter/free",
+        max_retries=0,
+        event_logger=emitted.append,
+        full_log_previews=True,
+    )
+    backend.generate(messages=[{"role": "user", "content": long_request}])
+
+    request_line = next(line for line in emitted if line.startswith("api_request "))
+    response_line = next(line for line in emitted if line.startswith("api_response "))
+    assert "...[truncated]" not in request_line
+    assert "...[truncated]" not in response_line
+    assert request_tail in request_line
+    assert response_tail in response_line

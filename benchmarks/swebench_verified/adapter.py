@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Mapping, Optional, cast
 
 from runtime.config_models import RunConfig
 from runtime.schemas import BenchmarkTask
+from runtime.task_context import TaskWorkspaceContext
 
 
 class SWEbenchVerifiedAdapter:
@@ -57,6 +58,8 @@ class SWEbenchVerifiedAdapter:
                     raise ValueError(
                         f"Invalid record type in {path}: expected object, got {type(record).__name__}"
                     )
+                if not self._record_matches_repo_filter(cast(Mapping[str, Any], record)):
+                    continue
                 task = self._record_to_task(cast(Mapping[str, Any], record))
                 tasks.append(task)
                 if selector and len(tasks) >= selector:
@@ -70,15 +73,49 @@ class SWEbenchVerifiedAdapter:
 
         ds = load_dataset(self.dataset_name, split=split)
         tasks: List[BenchmarkTask] = []
-        count = selector or len(ds)
-        for record in ds.select(range(min(count, len(ds)))):  # type: ignore[arg-type]
+        for record in ds:  # type: ignore[assignment]
             if not isinstance(record, dict):
                 raise ValueError(
                     f"Invalid record type in dataset split '{split}': "
                     f"expected object, got {type(record).__name__}"
                 )
+            if not self._record_matches_repo_filter(cast(Mapping[str, Any], record)):
+                continue
             tasks.append(self._record_to_task(cast(Mapping[str, Any], record)))
+            if selector and len(tasks) >= selector:
+                break
         return tasks
+
+    def _repo_allowlist(self) -> Optional[set[str]]:
+        """Return exact-match repo allowlist from benchmark params, if configured."""
+
+        raw = self.params.get("repo_allowlist")
+        if raw is None:
+            return None
+        if isinstance(raw, str):
+            value = raw.strip()
+            return {value} if value else set()
+        if isinstance(raw, list):
+            allowlist: set[str] = set()
+            for item in raw:
+                if isinstance(item, str) and item.strip():
+                    allowlist.add(item.strip())
+            return allowlist
+        return None
+
+    def _record_matches_repo_filter(self, record: Mapping[str, Any]) -> bool:
+        """Apply optional exact-match repo filtering using benchmark params."""
+
+        allowlist = self._repo_allowlist()
+        if allowlist is None:
+            return True
+        repo_raw = record.get("repo")
+        if not isinstance(repo_raw, str):
+            return False
+        repo = repo_raw.strip()
+        if not repo:
+            return False
+        return repo in allowlist
 
     def _record_to_task(self, record: Mapping[str, Any]) -> BenchmarkTask:
         """Convert one dataset row to a strict patch-generation benchmark task."""
@@ -109,15 +146,63 @@ class SWEbenchVerifiedAdapter:
             expected_output_type="patch",
         )
 
-    def workspace_root_for_task(self, task: BenchmarkTask) -> Path:
-        """Resolve the workspace root used by tools for a given task."""
+    def workspace_context_for_task(self, task: BenchmarkTask) -> TaskWorkspaceContext:
+        """Resolve task workspace/tool readiness context for SWE-bench tasks."""
+
+        repo = task.resources.get("repo") if task.resources else None
+        repo_name = repo if isinstance(repo, str) and repo else None
 
         if self.data_root:
-            repo = task.resources.get("repo") if task.resources else None
-            if isinstance(repo, str) and repo:
-                return self.data_root / repo
-            return self.data_root
-        return Path(".")
+            root = self.data_root
+            if repo_name:
+                repo_path = root / repo_name
+                if repo_path.exists():
+                    return TaskWorkspaceContext(
+                        workspace_root=repo_path,
+                        workspace_exists=True,
+                        tools_ready=True,
+                        workspace_kind="repo_checkout",
+                        reason=None,
+                        repo=repo_name,
+                        dataset_name=self.dataset_name,
+                    )
+                return TaskWorkspaceContext(
+                    workspace_root=root,
+                    workspace_exists=root.exists(),
+                    tools_ready=False,
+                    workspace_kind="dataset_root",
+                    reason=(
+                        f"Missing repo checkout for task repo '{repo_name}' under data_root: {repo_path}. "
+                        "Populate local benchmark repos under benchmark.data_root/<repo>."
+                    ),
+                    repo=repo_name,
+                    dataset_name=self.dataset_name,
+                    metadata={"expected_repo_path": str(repo_path)},
+                )
+            return TaskWorkspaceContext(
+                workspace_root=root,
+                workspace_exists=root.exists(),
+                tools_ready=root.exists(),
+                workspace_kind="dataset_root",
+                reason=None if root.exists() else f"Configured data_root does not exist: {root}",
+                repo=None,
+                dataset_name=self.dataset_name,
+            )
+
+        runner_root = Path(".")
+        return TaskWorkspaceContext(
+            workspace_root=runner_root,
+            workspace_exists=runner_root.exists(),
+            tools_ready=False,
+            workspace_kind="runner_root",
+            reason=(
+                "HF-backed SWE-bench tasks do not provide local repository workspaces. "
+                "For tools_enabled runs, configure benchmark.data_source=local and benchmark.data_root "
+                "with repo checkouts under <data_root>/<repo>."
+            ),
+            repo=repo_name,
+            dataset_name=self.dataset_name,
+        )
 
     def get_evaluator(self, config: RunConfig):
         """Return the benchmark-specific evaluator implementation."""

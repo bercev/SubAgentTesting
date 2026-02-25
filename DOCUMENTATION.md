@@ -160,6 +160,11 @@ flowchart TD
 5. If loading local tasks/repos, set `benchmark.data_root` to that root (under `external/` or any other local path).
 6. Keep orchestration generic by plugging the adapter into existing `runtime/run_service.py` and `runtime/eval_service.py`.
 
+Notes for tool-enabled benchmarks:
+- Adapters must provide structured workspace readiness via `workspace_context_for_task(...)` (not just a path).
+- `runtime/run_service.py` fails fast for `tools_enabled` when `tools_ready=false` to avoid wasted model calls.
+- SWE-bench HF-only rows do not provide local repo workspaces; use `benchmark.data_source=local` plus `benchmark.data_root` for tool runs.
+
 ### Tune runtime/tool behavior
 1. Change loop budgets/termination in `runtime/agent_runtime.py`.
 2. Adjust tool behavior and safety checks in `runtime/tools.py`.

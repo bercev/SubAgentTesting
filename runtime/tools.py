@@ -1,10 +1,15 @@
+import inspect
 import os
 import re
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
+
+
+DEFAULT_OPEN_MAX_LINES = 250
+MAX_OPEN_RANGE_LINES = 400
 
 
 @dataclass
@@ -15,6 +20,16 @@ class ToolContext:
     submit_callback: Optional[callable] = None
     bash_timeout_s: int = 60
     output_truncate: int = 4000
+    search_exclude_dirnames: Tuple[str, ...] = (
+        ".git",
+        ".venv",
+        "artifacts",
+        "logs",
+        "summaries",
+        "__pycache__",
+        ".pytest_cache",
+        "portable_agent_runner.egg-info",
+    )
 
 
 class ToolRegistry:
@@ -55,7 +70,11 @@ class ToolRegistry:
                 "type": "function",
                 "function": {
                     "name": "workspace_open",
-                    "description": "Open a file and return selected lines",
+                    "description": (
+                        "Open a file and return selected lines. Prefer line-bounded reads. "
+                        "If end_line is omitted, returns a capped page (default 250 lines) "
+                        "starting at start_line. Page through large files with start_line/end_line."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -71,7 +90,11 @@ class ToolRegistry:
                 "type": "function",
                 "function": {
                     "name": "workspace_search",
-                    "description": "Search for a regex pattern in files",
+                    "description": (
+                        "Search for a regex pattern in files. Supports only query and optional glob "
+                        "(for example glob='**/*.py' or '**/tests/*.py'). "
+                        "Do not pass start_line/end_line to this tool."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {
@@ -130,7 +153,10 @@ class ToolRegistry:
                 "type": "function",
                 "function": {
                     "name": "submit",
-                    "description": "Submit final artifact (patch or text)",
+                    "description": (
+                        "Submit final artifact and terminate the task. For patch tasks, final_artifact "
+                        "must be either one raw unified diff starting with 'diff --git' or an empty string."
+                    ),
                     "parameters": {
                         "type": "object",
                         "properties": {"final_artifact": {"type": "string"}},
@@ -147,12 +173,22 @@ class ToolRegistry:
             return {"error": f"unknown tool {name}"}
         if not isinstance(arguments, dict):
             return {"error": f"invalid arguments for {name}: expected object payload"}
+        normalized_arguments = dict(arguments)
+        if (
+            name == "bash"
+            and "cmd" not in normalized_arguments
+            and isinstance(normalized_arguments.get("command"), str)
+        ):
+            normalized_arguments["cmd"] = normalized_arguments["command"]
         try:
-            return self._tools[name](**arguments)
+            return self._tools[name](**normalized_arguments)
         except TypeError as exc:
+            expected_keys = sorted(inspect.signature(self._tools[name]).parameters.keys())
             return {
                 "error": f"invalid arguments for {name}: {exc}",
+                "tool_name": name,
                 "provided_keys": sorted(arguments.keys()),
+                "expected_keys": expected_keys,
             }
 
     def _workspace_root(self) -> Path:
@@ -176,7 +212,7 @@ class ToolRegistry:
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
         if not target.exists():
-            return {"error": "path not found"}
+            return {"error": "path not found", "path": path, "workspace_root": str(root)}
         entries = []
         for entry in sorted(target.iterdir()):
             entries.append({
@@ -192,13 +228,35 @@ class ToolRegistry:
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
         if not target.is_file():
-            return {"error": "file not found"}
+            return {"error": "file not found", "path": path, "workspace_root": str(root)}
         with target.open("r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-        start = max(1, start_line)
-        end = end_line if end_line is not None else len(lines)
-        snippet = "".join(lines[start - 1 : end])
-        return {"content": snippet, "start_line": start, "end_line": end}
+        total_lines = len(lines)
+        start = max(1, int(start_line))
+        clamped = False
+
+        if end_line is None:
+            requested_end = start + DEFAULT_OPEN_MAX_LINES - 1
+        else:
+            requested_end = max(start, int(end_line))
+            max_end = start + MAX_OPEN_RANGE_LINES - 1
+            if requested_end > max_end:
+                requested_end = max_end
+                clamped = True
+
+        end = min(requested_end, total_lines) if total_lines > 0 else 0
+        snippet = "".join(lines[start - 1 : end]) if total_lines > 0 else ""
+        truncated = end < total_lines
+        next_start_line = (end + 1) if truncated else None
+        return {
+            "content": snippet,
+            "start_line": start,
+            "end_line": end,
+            "total_lines": total_lines,
+            "truncated": truncated,
+            "clamped": clamped,
+            "next_start_line": next_start_line,
+        }
 
     def workspace_search(self, query: str, glob: str = "**/*") -> Dict[str, Any]:
         """Regex-search files under workspace and return capped matches."""
@@ -206,11 +264,18 @@ class ToolRegistry:
         root = self._workspace_root()
         pattern = re.compile(query)
         matches = []
+        excluded = set(self.ctx.search_exclude_dirnames)
         for path in root.glob(glob):
+            try:
+                rel_parts = path.relative_to(root).parts
+            except ValueError:
+                continue
+            if any(part in excluded for part in rel_parts):
+                continue
             if path.is_file():
                 try:
                     content = path.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
+                except (UnicodeDecodeError, OSError):
                     continue
                 for m in pattern.finditer(content):
                     line_no = content[: m.start()].count("\n") + 1

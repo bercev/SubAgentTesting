@@ -3,7 +3,10 @@ benchmark:
   dataset_name: SWE-bench/SWE-bench_Verified
   split: test
   data_source: hf
-  data_root:
+  data_root: ./data/swebench_repos
+  params:
+    repo_allowlist:
+      - astropy/astropy
 
 evaluation:
   harness_cmd: python -m swebench.harness.run_evaluation
@@ -11,8 +14,8 @@ evaluation:
   workdir: .
 
 runtime:
-  mode: patch_only
-  selector: 2
+  mode: tools_enabled
+  selector: 3
   max_tool_calls: 100
   max_wall_time_s: 600
 

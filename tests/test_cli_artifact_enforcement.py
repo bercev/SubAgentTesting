@@ -1,7 +1,9 @@
 import json
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
+import typer
 
 import scripts.cli as cli
 import runtime.eval_service as eval_service
@@ -9,10 +11,15 @@ import runtime.run_service as run_service
 from agents.spec_loader import AgentSpec
 from runtime.config_loader import normalize_run_config
 from runtime.schemas import AgentResult, BenchmarkTask
+from runtime.task_context import TaskWorkspaceContext
 
 
 class _FakeAdapter:
     benchmark_name = "swebench_verified"
+    _workspace_root = Path(".")
+    _workspace_tools_ready = True
+    _workspace_kind = "repo_checkout"
+    _workspace_reason = None
 
     def __init__(self, task: BenchmarkTask):
         self._task = task
@@ -30,8 +37,18 @@ class _FakeAdapter:
     def load_tasks(self, split: str, selector: int | None = None):
         return [self._task]
 
-    def workspace_root_for_task(self, task: BenchmarkTask) -> Path:
-        return Path(".")
+    def workspace_context_for_task(self, task: BenchmarkTask) -> TaskWorkspaceContext:
+        repo = task.resources.get("repo") if task.resources else None
+        repo_name = repo if isinstance(repo, str) else None
+        return TaskWorkspaceContext(
+            workspace_root=self._workspace_root,
+            workspace_exists=True,
+            tools_ready=self._workspace_tools_ready,
+            workspace_kind=self._workspace_kind,
+            reason=self._workspace_reason,
+            repo=repo_name,
+            dataset_name="SWE-bench/SWE-bench_Verified",
+        )
 
     def to_prediction_record(
         self,
@@ -59,6 +76,9 @@ class _FakeRegistry:
         return _FakeAdapter
 
 
+_UNSET = object()
+
+
 def _run_once(
     monkeypatch,
     tmp_path: Path,
@@ -67,6 +87,13 @@ def _run_once(
     verbose: bool = False,
     mode: str = "patch_only",
     runtime_tool_payload: dict | None = None,
+    loader_allowed_tools=_UNSET,
+    runtime_init_capture: dict | None = None,
+    full_log_previews: bool = False,
+    build_backend_capture: dict | None = None,
+    workspace_tools_ready: bool = True,
+    workspace_kind: str = "repo_checkout",
+    workspace_reason: str | None = None,
 ):
     run_config = normalize_run_config(
         {
@@ -105,11 +132,23 @@ def _run_once(
         decoding_defaults={},
     )
 
+    _FakeAdapter._workspace_root = Path(".")
+    _FakeAdapter._workspace_tools_ready = workspace_tools_ready
+    _FakeAdapter._workspace_kind = workspace_kind
+    _FakeAdapter._workspace_reason = workspace_reason
+
     class _FakeRuntime:
         def __init__(self, *args, **kwargs):
-            pass
+            if runtime_init_capture is not None:
+                runtime_init_capture["kwargs"] = kwargs
 
-        def run(self, task, prompt, tool_schemas, decoding_defaults=None):
+        def run(self, task, system_prompt, initial_user_message, tool_schemas, decoding_defaults=None):
+            if runtime_init_capture is not None:
+                runtime_init_capture["run_args"] = {
+                    "system_prompt": system_prompt,
+                    "initial_user_message": initial_user_message,
+                    "tool_schemas": tool_schemas,
+                }
             metadata = {"terminated": True, "repo": "astropy/astropy"}
             if runtime_tool_payload is not None:
                 metadata["tool_quality_runtime"] = runtime_tool_payload
@@ -123,15 +162,26 @@ def _run_once(
     monkeypatch.setattr(
         run_service.AgentSpecLoader,
         "load",
-        lambda *_args, **_kwargs: (spec, "Prompt", set()),
+        lambda *_args, **_kwargs: (
+            spec,
+            "Prompt",
+            set() if loader_allowed_tools is _UNSET else loader_allowed_tools,
+        ),
     )
-    monkeypatch.setattr(run_service, "build_backend", lambda *_args, **_kwargs: object())
+    def _fake_build_backend(*args, **kwargs):
+        if build_backend_capture is not None:
+            build_backend_capture["args"] = args
+            build_backend_capture["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr(run_service, "build_backend", _fake_build_backend)
     monkeypatch.setattr(run_service, "AgentRuntime", _FakeRuntime)
 
     outcome = run_service.execute_run(
         agent_path="profiles/agents/qwen3_coder_free.yaml",
         config=run_config,
         verbose=verbose,
+        full_log_previews=full_log_previews,
     )
 
     records = [
@@ -141,6 +191,37 @@ def _run_once(
     ]
     assert len(records) == 1
     return records[0], outcome
+
+
+def test_run_service_tools_enabled_preserves_explicit_empty_allowlist(monkeypatch, tmp_path: Path):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools=set(),
+        runtime_init_capture=captured,
+    )
+
+    assert captured["kwargs"]["allowed_tools"] == set()
+
+
+def test_run_service_tools_enabled_uses_full_fallback_when_allowlist_is_none(monkeypatch, tmp_path: Path):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools=None,
+        runtime_init_capture=captured,
+    )
+
+    allowed_tools = captured["kwargs"]["allowed_tools"]
+    assert isinstance(allowed_tools, set)
+    assert "submit" in allowed_tools
+    assert "bash" in allowed_tools
 
 
 def test_run_service_preserves_invalid_patch_output(monkeypatch, tmp_path: Path):
@@ -189,6 +270,157 @@ def test_cli_run_verbose_option_defaults_to_quiet():
     assert getattr(verbose_option, "default", None) is False
 
 
+def test_cli_run_prints_post_run_summary_by_default(monkeypatch, tmp_path: Path, capsys):
+    run_root = tmp_path / "artifacts" / "2026-02-24_120000"
+    run_log_path = run_root / "run.log"
+    manifest_path = run_root / "manifest.json"
+
+    fake_run_outcome = run_service.RunOutcome(
+        run_id="2026-02-24_120000",
+        benchmark_name="swebench_verified",
+        split_name="test",
+        mode_name="patch_only",
+        tasks_total=1,
+        valid_artifacts=1,
+        invalid_artifacts=0,
+        model_name_or_path="openrouter/free",
+        predictions_path=run_root / "predictions.jsonl",
+        manifest_path=manifest_path,
+        run_log_path=run_log_path,
+        manifest_payload={},
+    )
+
+    monkeypatch.setattr(cli, "load_run_config", lambda _: object())
+    monkeypatch.setattr(cli, "execute_run", lambda **_kwargs: fake_run_outcome)
+    monkeypatch.setattr(
+        cli,
+        "execute_run_log_summary",
+        lambda **_kwargs: SimpleNamespace(
+            terminal_lines=[
+                "Post-run summary: run_id=2026-02-24_120000",
+                "OpenRouter cost: total=$0.001000",
+            ],
+            manifest_path=manifest_path,
+        ),
+    )
+
+    cli.run(agent="a.yaml", run_config="r.yaml")
+
+    out = capsys.readouterr().out
+    assert "Post-run summary: run_id=2026-02-24_120000" in out
+    assert "OpenRouter cost: total=$0.001000" in out
+    assert "Manifest updated with run_log_summary:" in out
+
+
+def test_cli_run_can_skip_post_run_summary(monkeypatch, tmp_path: Path, capsys):
+    run_root = tmp_path / "artifacts" / "2026-02-24_120000"
+    fake_run_outcome = run_service.RunOutcome(
+        run_id="2026-02-24_120000",
+        benchmark_name="swebench_verified",
+        split_name="test",
+        mode_name="patch_only",
+        tasks_total=1,
+        valid_artifacts=1,
+        invalid_artifacts=0,
+        model_name_or_path="openrouter/free",
+        predictions_path=run_root / "predictions.jsonl",
+        manifest_path=run_root / "manifest.json",
+        run_log_path=run_root / "run.log",
+        manifest_payload={},
+    )
+
+    called = {"summary": 0}
+
+    monkeypatch.setattr(cli, "load_run_config", lambda _: object())
+    monkeypatch.setattr(cli, "execute_run", lambda **_kwargs: fake_run_outcome)
+    monkeypatch.setattr(
+        cli,
+        "execute_run_log_summary",
+        lambda **_kwargs: called.__setitem__("summary", called["summary"] + 1),
+    )
+
+    cli.run(agent="a.yaml", run_config="r.yaml", summary=False)
+
+    out = capsys.readouterr().out
+    assert "Post-run summary:" not in out
+    assert called["summary"] == 0
+
+
+def test_cli_run_passes_full_log_previews_flag_to_execute_run(monkeypatch, capsys):
+    captured: dict = {}
+    fake_run_outcome = run_service.RunOutcome(
+        run_id="2026-02-24_120000",
+        benchmark_name="swebench_verified",
+        split_name="test",
+        mode_name="patch_only",
+        tasks_total=1,
+        valid_artifacts=1,
+        invalid_artifacts=0,
+        model_name_or_path="openrouter/free",
+        predictions_path=Path("artifacts/2026-02-24_120000/predictions.jsonl"),
+        manifest_path=Path("artifacts/2026-02-24_120000/manifest.json"),
+        run_log_path=Path("artifacts/2026-02-24_120000/run.log"),
+        manifest_payload={},
+    )
+
+    monkeypatch.setattr(cli, "load_run_config", lambda _: object())
+
+    def _fake_execute_run(**kwargs):
+        captured.update(kwargs)
+        return fake_run_outcome
+
+    monkeypatch.setattr(cli, "execute_run", _fake_execute_run)
+
+    cli.run(agent="a.yaml", run_config="r.yaml", summary=False, full_log_previews=True)
+
+    capsys.readouterr()
+    assert captured["full_log_previews"] is True
+
+
+def test_cli_predict_forwards_full_log_previews_flag(monkeypatch):
+    captured: dict = {}
+
+    def _fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "run", _fake_run)
+
+    cli.predict(agent="a.yaml", run_config="r.yaml", summary=False, full_log_previews=True)
+
+    assert captured["full_log_previews"] is True
+
+
+def test_cli_summarize_run_prints_summary_and_updates_manifest(monkeypatch, tmp_path: Path, capsys):
+    run_log_path = tmp_path / "artifacts" / "2026-02-24_120000" / "run.log"
+    run_log_path.parent.mkdir(parents=True)
+    run_log_path.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(
+        cli,
+        "execute_run_log_summary",
+        lambda **_kwargs: SimpleNamespace(
+            terminal_lines=["Post-run summary: run_id=2026-02-24_120000"],
+            manifest_path=run_log_path.parent / "manifest.json",
+        ),
+    )
+
+    cli.summarize_run(run_log=str(run_log_path))
+
+    out = capsys.readouterr().out
+    assert "Post-run summary: run_id=2026-02-24_120000" in out
+    assert "Manifest updated with run_log_summary:" in out
+
+
+def test_cli_summarize_run_invalid_path_maps_to_bad_parameter(monkeypatch):
+    monkeypatch.setattr(
+        cli,
+        "execute_run_log_summary",
+        lambda **_kwargs: (_ for _ in ()).throw(ValueError("bad run log path")),
+    )
+    with pytest.raises(typer.BadParameter):
+        cli.summarize_run(run_log="artifacts/invalid/run.log")
+
+
 def test_run_service_verbose_prints_per_task_logs(monkeypatch, tmp_path: Path, capsys):
     _run_once(monkeypatch, tmp_path, raw_artifact="", verbose=True)
     out = capsys.readouterr().out
@@ -201,6 +433,91 @@ def test_run_service_writes_run_log_file(monkeypatch, tmp_path: Path):
     assert "Starting run:" in content
     assert "Run summary:" in content
     assert "artifact_valid=" in content
+    assert "workspace_context" in content
+
+
+def test_run_service_tools_enabled_fails_fast_when_workspace_not_tool_ready(monkeypatch, tmp_path: Path):
+    backend_captured: dict = {}
+    with pytest.raises(ValueError, match="benchmark.data_source=local"):
+        _run_once(
+            monkeypatch,
+            tmp_path,
+            raw_artifact="",
+            mode="tools_enabled",
+            workspace_tools_ready=False,
+            workspace_kind="runner_root",
+            workspace_reason="HF-backed tasks do not provide local repo workspaces",
+            build_backend_capture=backend_captured,
+        )
+
+    assert backend_captured == {}
+
+
+def test_run_service_patch_only_allows_non_tool_ready_workspace(monkeypatch, tmp_path: Path):
+    record, _ = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="diff --git a/a b/a\n",
+        mode="patch_only",
+        workspace_tools_ready=False,
+        workspace_kind="runner_root",
+        workspace_reason="HF-backed tasks do not provide local repo workspaces",
+    )
+    assert record["instance_id"] == "astropy__astropy-12907"
+
+
+def test_run_service_artifact_preview_truncates_by_default(monkeypatch, tmp_path: Path):
+    long_artifact = "A" * 500 + "TAIL_MARKER"
+    _, outcome = _run_once(monkeypatch, tmp_path, raw_artifact=long_artifact, verbose=False)
+    run_log = outcome.run_log_path.read_text(encoding="utf-8")
+    assert "artifact_preview=" in run_log
+    assert "...[truncated]" in run_log
+
+
+def test_run_service_artifact_preview_full_when_enabled(monkeypatch, tmp_path: Path):
+    long_artifact = "A" * 500 + "TAIL_MARKER"
+    _, outcome = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact=long_artifact,
+        verbose=False,
+        full_log_previews=True,
+    )
+    run_log = outcome.run_log_path.read_text(encoding="utf-8")
+    assert "artifact_preview=" in run_log
+    assert "TAIL_MARKER" in run_log
+    assert "...[truncated]" not in run_log
+
+
+def test_run_service_passes_full_log_previews_to_build_backend(monkeypatch, tmp_path: Path):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        verbose=False,
+        full_log_previews=True,
+        build_backend_capture=captured,
+    )
+    assert captured["kwargs"]["full_log_previews"] is True
+
+
+def test_run_service_builds_tools_mode_initial_user_message_with_workspace_context(
+    monkeypatch, tmp_path: Path
+):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        verbose=False,
+        mode="tools_enabled",
+        runtime_init_capture=captured,
+    )
+    initial_user_message = captured["run_args"]["initial_user_message"]
+    assert "Fix issue" in initial_user_message
+    assert "<workspace_context>" in initial_user_message
+    assert "tools_ready: true" in initial_user_message
 
 
 def test_run_service_run_log_uses_structured_prefix(monkeypatch, tmp_path: Path):

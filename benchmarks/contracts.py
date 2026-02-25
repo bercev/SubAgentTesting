@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, ClassVar, Dict, Optional, Protocol
 
 from runtime.schemas import BenchmarkTask
+from runtime.task_context import TaskWorkspaceContext
 
 
 class BenchmarkEvaluator(Protocol):
@@ -31,7 +32,7 @@ class BenchmarkAdapter(Protocol):
 
     def load_tasks(self, split: str, selector: Optional[int]) -> list[BenchmarkTask]: ...
 
-    def workspace_root_for_task(self, task: BenchmarkTask) -> Path: ...
+    def workspace_context_for_task(self, task: BenchmarkTask) -> TaskWorkspaceContext: ...
 
     def to_prediction_record(
         self,

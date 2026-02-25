@@ -8,6 +8,7 @@ from runtime.model_backend import ModelBackend, OpenRouterBackend
 def build_backend(
     backend_config: Mapping[str, Any],
     event_logger: Optional[Callable[[str], None]] = None,
+    full_log_previews: bool = False,
 ) -> ModelBackend:
     """Construct backend implementation from agent backend config."""
 
@@ -23,5 +24,6 @@ def build_backend(
             initial_backoff_s=backend_config.get("initial_backoff_s", 1.0),
             max_backoff_s=backend_config.get("max_backoff_s", 10.0),
             event_logger=event_logger,
+            full_log_previews=full_log_previews,
         )
     raise ValueError(f"Unsupported backend type: {backend_type}")
