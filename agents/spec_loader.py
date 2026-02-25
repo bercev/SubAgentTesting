@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 import yaml
 
@@ -29,7 +29,12 @@ class AgentSpecLoader:
 
         self.base_dir = base_dir
 
-    def load(self, path: Path) -> Tuple[AgentSpec, str, Optional[Set[str]]]:
+    def load(
+        self,
+        path: Path,
+        *,
+        runtime_mode: Optional[Literal["patch_only", "tools_enabled"]] = None,
+    ) -> Tuple[AgentSpec, str, Optional[Set[str]]]:
         """Load agent spec, render final system prompt, and derive allowed tools."""
 
         with path.open("r", encoding="utf-8") as f:
@@ -41,7 +46,7 @@ class AgentSpecLoader:
             backend=data["backend"],
             prompt_template=prompt_template,
             tools=tools,
-            skills=data.get("skills", []),
+            skills=self._normalize_skills_field(data.get("skills", [])),
             tool_to_skill_map=data.get("tool_to_skill_map", {}),
             termination=data.get("termination", {}),
             decoding_defaults=data.get("decoding_defaults", {}),
@@ -53,14 +58,20 @@ class AgentSpecLoader:
             skill_allowed_tools=skill_allowed_tools,
             has_skills=bool(spec.skills),
         )
-        prompt = self.render_prompt(spec, skills_text)
+        prompt = self.render_prompt(spec, skills_text, runtime_mode=runtime_mode)
         return spec, prompt, allowed_tools
 
-    def render_prompt(self, spec: AgentSpec, skills_text: str) -> str:
+    def render_prompt(
+        self,
+        spec: AgentSpec,
+        skills_text: str,
+        *,
+        runtime_mode: Optional[Literal["patch_only", "tools_enabled"]] = None,
+    ) -> str:
         """Render profile prompt template by injecting loaded skills text."""
 
         base = spec.prompt_template
-        if spec.skills and "{skills}" not in base:
+        if spec.skills and "{skills}" not in base and runtime_mode != "patch_only":
             raise ValueError(
                 "Prompt template is missing required `{skills}` placeholder while skills are configured"
             )
@@ -123,6 +134,35 @@ class AgentSpecLoader:
                 raise ValueError(
                     f"`tools[{idx}]` must be a non-empty string or object with non-empty `name`"
                 )
+            names.append(name)
+
+        deduped: List[str] = []
+        seen: Set[str] = set()
+        for name in names:
+            if name in seen:
+                continue
+            seen.add(name)
+            deduped.append(name)
+        return deduped
+
+    def _normalize_skills_field(self, raw_skills: Any) -> List[str]:
+        """Normalize agent `skills` field to a deduplicated list of skill names."""
+
+        if raw_skills is None:
+            return []
+        if not isinstance(raw_skills, list):
+            raise ValueError("`skills` must be a list of skill names")
+
+        names: List[str] = []
+        for idx, item in enumerate(raw_skills):
+            if item is None:
+                # Be forgiving for YAML entries like `-` that parse as null.
+                continue
+            if not isinstance(item, str):
+                raise ValueError(f"`skills[{idx}]` must be a string skill name")
+            name = item.strip()
+            if not name:
+                continue
             names.append(name)
 
         deduped: List[str] = []

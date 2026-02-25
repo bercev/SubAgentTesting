@@ -19,6 +19,7 @@ This command:
 - creates `.venv` with `uv`
 - installs this project in editable mode
 - clones SWE-bench into `external/SWE-bench` if missing
+- clones `astropy/astropy` into `data/swebench_repos/astropy/astropy` if missing (for `tools_enabled` quickstart)
 - installs SWE-bench into the same `.venv`
 
 ### 2) Configure secrets
@@ -40,10 +41,12 @@ OPENROUTER_API_KEY=your_key_here
 - Run configs: `profiles/runs/*.yaml`
 - Agent profiles: `profiles/agents/*.yaml`
 
-Default run config:
-- `profiles/runs/default.yaml`
+Quickstart presets:
+- `profiles/runs/swebench.yaml` for `patch_only` (HF-backed tasks, no local repo workspace required)
+- `profiles/runs/swebench_tools_hf_astropy.yaml` for `tools_enabled` (HF-backed tasks plus local repo checkouts under `./data/swebench_repos/<repo>`, limited to `astropy/astropy`)
+- `profiles/runs/swebench_tools_local.yaml` for `tools_enabled` with a fully local SWE-bench setup (`benchmark.data_root=./data/swebench_local`)
 
-### 4) Run a quick example (from project root)
+### 4) Run quick examples (from project root)
 
 Activate the virtual environment:
 
@@ -51,7 +54,7 @@ Activate the virtual environment:
 source .venv/bin/activate
 ```
 
-Run one quick prediction job:
+Run a quick `patch_only` prediction job (uses `profiles/runs/swebench.yaml`):
 
 ```bash
 agent run \
@@ -60,6 +63,18 @@ agent run \
   --mode patch_only \
   --selector 10
 ```
+
+Run a quick `tools_enabled` prediction job (uses `profiles/runs/swebench_tools_hf_astropy.yaml`):
+
+```bash
+agent run \
+  --agent profiles/agents/openrouter_free.yaml \
+  --run-config profiles/runs/swebench_tools_hf_astropy.yaml \
+  --mode tools_enabled \
+  --selector 1
+```
+
+`tools_enabled` runs require a tool-ready local repository workspace. For SWE-bench, place repo checkouts under `benchmark.data_root/<repo>` (for the preset above: `./data/swebench_repos/astropy/astropy`). `patch_only` runs can use HF-only task loading.
 
 Pick the latest predictions file:
 
@@ -75,6 +90,8 @@ agent eval \
   "$PRED_PATH" \
   --run-config profiles/runs/swebench.yaml
 ```
+
+If you are evaluating a `tools_enabled` run, use the same tools run config that generated the predictions (for example `profiles/runs/swebench_tools_hf_astropy.yaml` or `profiles/runs/swebench_tools_local.yaml`).
 
 ## Config Model
 
@@ -518,7 +535,7 @@ Notes:
 
 Tool allowlist behavior notes:
 - `skills` serve two purposes: prompt injection and skill-derived allowed-tool declarations.
-- If `skills` are configured, the prompt template/file must include the `{skills}` placeholder (hard validation).
+- In `tools_enabled` mode, if `skills` are configured, the prompt template/file must include the `{skills}` placeholder (hard validation). In `patch_only`, missing `{skills}` is allowed and skills text is not injected.
 - In `tools_enabled` mode, runtime uses the intersection of skill-allowed tools and agent `tools` (when `tools` is present).
 - If `tools` is omitted and no skills declare tools, runtime falls back to the full tool registry in `tools_enabled` mode (legacy-compatible behavior).
 - In `patch_only` mode, runtime ignores agent `tools` and exposes only the `submit` termination tool.

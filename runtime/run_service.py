@@ -90,7 +90,7 @@ def execute_run(
 
     base_dir = Path.cwd()
     spec_loader = AgentSpecLoader(base_dir)
-    spec, prompt, allowed_tools = spec_loader.load(Path(agent_path))
+    spec, prompt, allowed_tools = spec_loader.load(Path(agent_path), runtime_mode=mode_name)
 
     adapter_cls = BenchmarkRegistry().get_adapter(benchmark_name)
     adapter = adapter_cls.from_config(effective_config)

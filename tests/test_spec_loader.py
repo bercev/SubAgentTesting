@@ -154,6 +154,60 @@ decoding_defaults: {}
         loader.load(agent_yaml)
 
 
+def test_agent_spec_skills_without_placeholder_allowed_in_patch_only(tmp_path: Path):
+    skills_dir = tmp_path / "skills" / "s1"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("Allowed Tools:\n- submit\n")
+
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi"
+tools: [submit]
+skills: [s1]
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    spec, prompt, allowed = loader.load(agent_yaml, runtime_mode="patch_only")
+
+    assert spec.skills == ["s1"]
+    assert prompt == "Hi"
+    assert allowed == {"submit"}
+
+
+def test_agent_spec_ignores_empty_skill_entries(tmp_path: Path):
+    skills_dir = tmp_path / "skills" / "s1"
+    skills_dir.mkdir(parents=True)
+    (skills_dir / "SKILL.md").write_text("Allowed Tools:\n- submit\n")
+
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi {skills}"
+tools: [submit]
+skills: [s1, null, "  "]
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    spec, prompt, allowed = loader.load(agent_yaml)
+
+    assert spec.skills == ["s1"]
+    assert "Allowed Tools" in prompt
+    assert allowed == {"submit"}
+
+
 def test_tools_profile_rendered_prompt_includes_tool_protocol_rules():
     repo_root = Path(__file__).resolve().parents[1]
     loader = AgentSpecLoader(repo_root)

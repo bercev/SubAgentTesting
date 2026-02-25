@@ -19,6 +19,7 @@ This command:
 - creates `.venv` with `uv`
 - installs this project in editable mode
 - clones SWE-bench into `external/SWE-bench` if missing
+- clones `astropy/astropy` into `data/swebench_repos/astropy/astropy` if missing (for `tools_enabled` quickstart)
 - installs SWE-bench into the same `.venv`
 
 ### 2) Configure secrets
@@ -40,10 +41,12 @@ OPENROUTER_API_KEY=your_key_here
 - Run configs: `profiles/runs/*.yaml`
 - Agent profiles: `profiles/agents/*.yaml`
 
-Default run config:
-- `profiles/runs/default.yaml`
+Quickstart presets:
+- `profiles/runs/swebench.yaml` for `patch_only` (HF-backed tasks, no local repo workspace needed)
+- `profiles/runs/swebench_tools_hf_astropy.yaml` for `tools_enabled` (HF-backed tasks + local repo checkouts under `./data/swebench_repos/<repo>`, limited to `astropy/astropy`)
+- `profiles/runs/swebench_tools_local.yaml` for `tools_enabled` with a fully local SWE-bench setup (`benchmark.data_root=./data/swebench_local`)
 
-### 4) Run a quick example (from project root)
+### 4) Run quick examples (from project root)
 
 Activate the virtual environment:
 
@@ -51,7 +54,7 @@ Activate the virtual environment:
 source .venv/bin/activate
 ```
 
-Run one quick prediction job:
+Run a quick `patch_only` prediction job (uses `profiles/runs/swebench.yaml`):
 
 ```bash
 agent run \
@@ -61,7 +64,17 @@ agent run \
   --selector 10
 ```
 
-`tools_enabled` runs require a local tool-ready repository workspace for the task dataset (for SWE-bench: use `benchmark.data_source=local` and set `benchmark.data_root` with repo checkouts under `<data_root>/<repo>`). HF-only task loading is suitable for `patch_only` runs but will now fail fast in `tools_enabled`.
+Run a quick `tools_enabled` prediction job (uses `profiles/runs/swebench_tools_hf_astropy.yaml`):
+
+```bash
+agent run \
+  --agent profiles/agents/openrouter_free.yaml \
+  --run-config profiles/runs/swebench_tools_hf_astropy.yaml \
+  --mode tools_enabled \
+  --selector 1
+```
+
+`tools_enabled` runs require a tool-ready local repository workspace. For SWE-bench, put repo checkouts under `benchmark.data_root/<repo>` (for the preset above: `./data/swebench_repos/astropy/astropy`). `patch_only` runs can use HF-only task loading.
 
 Pick the latest predictions file:
 
@@ -77,3 +90,5 @@ agent eval \
   "$PRED_PATH" \
   --run-config profiles/runs/swebench.yaml
 ```
+
+If you are evaluating a `tools_enabled` run, use the same tools run config used for generation (for example `profiles/runs/swebench_tools_hf_astropy.yaml` or `profiles/runs/swebench_tools_local.yaml`).
