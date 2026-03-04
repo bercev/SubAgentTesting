@@ -56,6 +56,10 @@ def run(
     selector: Optional[int] = typer.Option(None, help="Number of tasks override"),
     mode: Optional[str] = typer.Option(None, help="Mode override: patch_only or tools_enabled"),
     run_config: str = typer.Option("profiles/runs/default.yaml", help="Run config path"),
+    agent_architecture: Optional[str] = typer.Option(
+        None,
+        help="Override agent architecture id (for example: none, mini-swe-agent).",
+    ),
     summary: bool = typer.Option(
         True,
         "--summary/--no-summary",
@@ -84,6 +88,7 @@ def run(
         split=split,
         selector=selector,
         mode=mode,
+        agent_architecture=agent_architecture,
         verbose=verbose,
         full_log_previews=full_log_previews,
     )
@@ -122,6 +127,10 @@ def predict(
     split: Optional[str] = typer.Option(None),
     selector: Optional[int] = typer.Option(1),
     run_config: str = typer.Option("profiles/runs/default.yaml"),
+    agent_architecture: Optional[str] = typer.Option(
+        None,
+        help="Override agent architecture id (for example: none, mini-swe-agent).",
+    ),
     summary: bool = typer.Option(
         True,
         "--summary/--no-summary",
@@ -147,6 +156,7 @@ def predict(
         selector=selector,
         mode="patch_only",
         run_config=run_config,
+        agent_architecture=agent_architecture,
         summary=summary,
         full_log_previews=full_log_previews,
         verbose=verbose,

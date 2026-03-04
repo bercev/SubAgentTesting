@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_architectures.constants import ARCHITECTURE_MINI_SWE_AGENT, ARCHITECTURE_NONE
 from agents.spec_loader import AgentSpecLoader
 
 
@@ -128,6 +129,8 @@ decoding_defaults: {}
 
     assert spec.tools is None
     assert allowed is None
+    assert spec.agent_architecture == ARCHITECTURE_NONE
+    assert spec.agent_architecture_config == {}
 
 
 def test_agent_spec_skills_require_prompt_placeholder(tmp_path: Path):
@@ -218,3 +221,65 @@ def test_tools_profile_rendered_prompt_includes_tool_protocol_rules():
     assert "**/*.py" in prompt
     assert "workspace_search only accepts query and optional glob" in prompt
     assert "line-bounded workspace_open" in prompt
+
+
+def test_agent_spec_accepts_mini_architecture_config(tmp_path: Path):
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi"
+agent_architecture: mini-swe-agent
+agent_architecture_config:
+  planner: constrained
+  retries: 2
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    spec, _prompt, _allowed = loader.load(agent_yaml)
+
+    assert spec.agent_architecture == ARCHITECTURE_MINI_SWE_AGENT
+    assert spec.agent_architecture_config == {"planner": "constrained", "retries": 2}
+
+
+def test_agent_spec_rejects_invalid_architecture_id(tmp_path: Path):
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi"
+agent_architecture: unknown-arch
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    with pytest.raises(ValueError, match="Unsupported agent architecture"):
+        loader.load(agent_yaml)
+
+
+def test_agent_spec_rejects_non_object_architecture_config(tmp_path: Path):
+    agent_yaml = tmp_path / "agent.yaml"
+    agent_yaml.write_text(
+        """
+name: test
+backend: {type: openrouter, model: x}
+prompt_template: "Hi"
+agent_architecture_config: "bad"
+tool_to_skill_map: {}
+termination: {tool: submit}
+decoding_defaults: {}
+"""
+    )
+
+    loader = AgentSpecLoader(tmp_path)
+    with pytest.raises(ValueError, match="agent_architecture_config"):
+        loader.load(agent_yaml)

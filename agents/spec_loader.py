@@ -4,6 +4,7 @@ from typing import Any, Dict, List, Literal, Optional, Set, Tuple
 
 import yaml
 
+from agent_architectures.constants import ARCHITECTURE_NONE, normalize_architecture_id
 from skills.loader import load_skills
 
 
@@ -19,6 +20,8 @@ class AgentSpec:
     tool_to_skill_map: Dict[str, List[str]]
     termination: Dict[str, Any]
     decoding_defaults: Dict[str, Any]
+    agent_architecture: str
+    agent_architecture_config: Dict[str, Any]
 
 
 class AgentSpecLoader:
@@ -50,6 +53,10 @@ class AgentSpecLoader:
             tool_to_skill_map=data.get("tool_to_skill_map", {}),
             termination=data.get("termination", {}),
             decoding_defaults=data.get("decoding_defaults", {}),
+            agent_architecture=self._normalize_agent_architecture(data.get("agent_architecture")),
+            agent_architecture_config=self._normalize_architecture_config(
+                data.get("agent_architecture_config")
+            ),
         )
         skill_dirs = [self.base_dir / "skills" / s for s in spec.skills]
         skills_text, skill_allowed_tools = load_skills(skill_dirs)
@@ -187,11 +194,31 @@ class AgentSpecLoader:
         if has_skills:
             if explicit is None:
                 return set(skill_allowed_tools)
+            if len(explicit) == 0:
+                # Empty tools list with skills means "defer to skills allowlist".
+                return set(skill_allowed_tools)
             return set(skill_allowed_tools).intersection(explicit)
         if explicit is None:
             # Backward-compatible tools_enabled behavior when neither skills nor tools constrain tools.
             return None
         return explicit
+
+    def _normalize_agent_architecture(self, value: Any) -> str:
+        """Normalize architecture id from optional profile field."""
+
+        if value is None:
+            return ARCHITECTURE_NONE
+        return normalize_architecture_id(value)
+
+    @staticmethod
+    def _normalize_architecture_config(value: Any) -> Dict[str, Any]:
+        """Normalize optional architecture config block to a dict payload."""
+
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise ValueError("`agent_architecture_config` must be an object when provided")
+        return dict(value)
 
 def build_allowed_tools_from_skills(skill_names: List[str], base_dir: Path) -> Set[str]:
     """Resolve allowed tools set from configured skill directories."""

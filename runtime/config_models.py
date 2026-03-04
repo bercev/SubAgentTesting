@@ -69,6 +69,7 @@ class RuntimeConfig(BaseModel):
     selector: Optional[int] = 5
     max_tool_calls: int = 20
     max_wall_time_s: int = 600
+    agent_architecture_override: Optional[str] = None
     tool_quality_enabled: bool = True
     tool_quality_weights: ToolQualityWeights = Field(default_factory=ToolQualityWeights)
 

@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from agent_architectures.constants import ARCHITECTURE_MINI_SWE_AGENT, ARCHITECTURE_NONE
 from runtime.config_loader import load_run_config, normalize_run_config
 
 
@@ -167,6 +168,87 @@ def test_tool_quality_weights_reject_invalid_sum():
                         "termination_quality": 0.3,
                         "budget_quality": 0.1,
                     },
+                },
+                "output": {"artifacts_dir": "artifacts"},
+            }
+        )
+
+
+def test_normalize_run_config_accepts_architecture_override():
+    cfg = normalize_run_config(
+        {
+            "benchmark": {
+                "name": "swebench_verified",
+                "dataset_name": "SWE-bench/SWE-bench_Verified",
+                "split": "test",
+                "data_source": "hf",
+            },
+            "evaluation": {
+                "harness_cmd": "python -m swebench.harness.run_evaluation",
+                "eval_root": "./external/SWE-bench",
+                "workdir": ".",
+            },
+            "runtime": {
+                "mode": "patch_only",
+                "selector": 1,
+                "max_tool_calls": 2,
+                "max_wall_time_s": 30,
+                "agent_architecture_override": "mini-swe-agent",
+            },
+            "output": {"artifacts_dir": "artifacts"},
+        }
+    )
+    assert cfg.runtime.agent_architecture_override == ARCHITECTURE_MINI_SWE_AGENT
+
+
+def test_normalize_run_config_allows_explicit_none_architecture_override():
+    cfg = normalize_run_config(
+        {
+            "benchmark": {
+                "name": "swebench_verified",
+                "dataset_name": "SWE-bench/SWE-bench_Verified",
+                "split": "test",
+                "data_source": "hf",
+            },
+            "evaluation": {
+                "harness_cmd": "python -m swebench.harness.run_evaluation",
+                "eval_root": "./external/SWE-bench",
+                "workdir": ".",
+            },
+            "runtime": {
+                "mode": "patch_only",
+                "selector": 1,
+                "max_tool_calls": 2,
+                "max_wall_time_s": 30,
+                "agent_architecture_override": "none",
+            },
+            "output": {"artifacts_dir": "artifacts"},
+        }
+    )
+    assert cfg.runtime.agent_architecture_override == ARCHITECTURE_NONE
+
+
+def test_normalize_run_config_rejects_invalid_architecture_override():
+    with pytest.raises(ValueError, match="Unsupported agent architecture"):
+        normalize_run_config(
+            {
+                "benchmark": {
+                    "name": "swebench_verified",
+                    "dataset_name": "SWE-bench/SWE-bench_Verified",
+                    "split": "test",
+                    "data_source": "hf",
+                },
+                "evaluation": {
+                    "harness_cmd": "python -m swebench.harness.run_evaluation",
+                    "eval_root": "./external/SWE-bench",
+                    "workdir": ".",
+                },
+                "runtime": {
+                    "mode": "patch_only",
+                    "selector": 1,
+                    "max_tool_calls": 2,
+                    "max_wall_time_s": 30,
+                    "agent_architecture_override": "bad-arch",
                 },
                 "output": {"artifacts_dir": "artifacts"},
             }

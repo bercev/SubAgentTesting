@@ -5,11 +5,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from agent_architectures.base import ArchitectureRunRequest
+from agent_architectures.factory import get_agent_architecture, resolve_agent_architecture
 from agents.spec_loader import AgentSpecLoader
 from benchmarks.registry import BenchmarkRegistry
-from runtime.agent_runtime import AgentRuntime
 from runtime.artifact_policy import apply_artifact_policy
-from runtime.backend_factory import build_backend
 from runtime.config_loader import apply_run_overrides
 from runtime.config_models import RunConfig
 from runtime.manifest_store import append_log, manifest_path, new_run_id, now_iso, write_manifest
@@ -43,17 +43,6 @@ class RunOutcome:
     manifest_payload: Dict[str, Any]
 
 
-def _filter_tool_schemas(registry: ToolRegistry, allowed: set[str]) -> list[dict[str, Any]]:
-    """Keep only tool schemas explicitly allowed by the active policy."""
-
-    schemas = []
-    for schema in registry.schemas:
-        name = schema.get("function", {}).get("name")
-        if name in allowed:
-            schemas.append(schema)
-    return schemas
-
-
 def _preview_text_for_log(text: str, limit: Optional[int] = 400) -> str:
     """Normalize and truncate multi-line text for compact run-log diagnostics."""
 
@@ -61,6 +50,25 @@ def _preview_text_for_log(text: str, limit: Optional[int] = 400) -> str:
     if limit is None or len(compact) <= limit:
         return compact
     return compact[:limit] + "...[truncated]"
+
+
+def _resolve_allowed_tools(
+    *,
+    mode_name: str,
+    profile_allowed_tools: Optional[set[str]],
+    tool_registry: ToolRegistry,
+) -> set[str]:
+    """Resolve per-task tool allowlist from mode + profile/skill policy."""
+
+    if mode_name == "patch_only":
+        return {"submit"}
+    if profile_allowed_tools is None:
+        return {
+            schema.get("function", {}).get("name")
+            for schema in tool_registry.schemas
+            if isinstance(schema.get("function", {}).get("name"), str)
+        }
+    return set(profile_allowed_tools)
 
 
 def execute_run(
@@ -71,6 +79,7 @@ def execute_run(
     split: Optional[str] = None,
     selector: Optional[int] = None,
     mode: Optional[str] = None,
+    agent_architecture: Optional[str] = None,
     verbose: bool = False,
     full_log_previews: bool = False,
 ) -> RunOutcome:
@@ -91,6 +100,12 @@ def execute_run(
     base_dir = Path.cwd()
     spec_loader = AgentSpecLoader(base_dir)
     spec, prompt, allowed_tools = spec_loader.load(Path(agent_path), runtime_mode=mode_name)
+    resolved_architecture = resolve_agent_architecture(
+        cli_override=agent_architecture,
+        run_override=effective_config.runtime.agent_architecture_override,
+        profile_architecture=spec.agent_architecture,
+    )
+    architecture_runtime = None
 
     adapter_cls = BenchmarkRegistry().get_adapter(benchmark_name)
     adapter = adapter_cls.from_config(effective_config)
@@ -115,6 +130,7 @@ def execute_run(
             f" mode={mode_name}"
             f" tasks={len(tasks)}"
             f" model={model_name_or_path}"
+            f" architecture={resolved_architecture}"
             f" agent_profile={agent_path}"
         ),
     )
@@ -176,51 +192,43 @@ def execute_run(
                     source="model_backend.py",
                 )
 
-            if mode_name == "patch_only":
-                allowed = {"submit"}
-                tool_schemas = None
-            else:
-                if not workspace.tools_ready:
-                    raise ValueError(
-                        "tools_enabled task workspace is not tool-ready: "
-                        f"task_id={task.task_id} "
-                        f"workspace_root={workspace.workspace_root} "
-                        f"workspace_kind={workspace.workspace_kind} "
-                        f"reason={workspace.reason or 'unspecified'} "
-                        "Remediation: configure a local benchmark workspace with "
-                        "benchmark.data_source=local and benchmark.data_root containing repo checkouts "
-                        "under <data_root>/<repo>."
-                    )
-                if allowed_tools is None:
-                    allowed = {
-                        schema.get("function", {}).get("name") for schema in tool_registry.schemas
-                    }
-                else:
-                    allowed = allowed_tools
-                tool_schemas = _filter_tool_schemas(tool_registry, allowed)
-
-            backend = build_backend(
-                spec.backend,
-                event_logger=_api_log,
-                full_log_previews=full_log_previews,
-            )
-            runtime = AgentRuntime(
-                backend=backend,
-                tool_registry=tool_registry,
-                allowed_tools=allowed,
-                max_tool_calls=effective_config.runtime.max_tool_calls,
-                max_wall_time_s=effective_config.runtime.max_wall_time_s,
-                termination_tool=termination_tool,
+            if mode_name == "tools_enabled" and not workspace.tools_ready:
+                raise ValueError(
+                    "tools_enabled task workspace is not tool-ready: "
+                    f"task_id={task.task_id} "
+                    f"workspace_root={workspace.workspace_root} "
+                    f"workspace_kind={workspace.workspace_kind} "
+                    f"reason={workspace.reason or 'unspecified'} "
+                    "Remediation: configure a local benchmark workspace with "
+                    "benchmark.data_source=local and benchmark.data_root containing repo checkouts "
+                    "under <data_root>/<repo>."
+                )
+            allowed = _resolve_allowed_tools(
                 mode_name=mode_name,
+                profile_allowed_tools=allowed_tools,
+                tool_registry=tool_registry,
             )
+            if architecture_runtime is None:
+                architecture_runtime = get_agent_architecture(resolved_architecture)
 
             initial_user_message = build_initial_user_message(task, workspace, mode_name)
-            result = runtime.run(
-                task=task,
-                system_prompt=prompt,
-                initial_user_message=initial_user_message,
-                tool_schemas=tool_schemas,
-                decoding_defaults=spec.decoding_defaults,
+            result = architecture_runtime.run_task(
+                ArchitectureRunRequest(
+                    task=task,
+                    system_prompt=prompt,
+                    initial_user_message=initial_user_message,
+                    mode_name=mode_name,
+                    backend_config=spec.backend,
+                    decoding_defaults=spec.decoding_defaults,
+                    tool_registry=tool_registry,
+                    allowed_tools=allowed,
+                    max_tool_calls=effective_config.runtime.max_tool_calls,
+                    max_wall_time_s=effective_config.runtime.max_wall_time_s,
+                    termination_tool=termination_tool,
+                    full_log_previews=full_log_previews,
+                    api_log=_api_log,
+                    architecture_config=spec.agent_architecture_config,
+                )
             )
             # Explicit submit tool payload takes precedence over assistant free text.
             if submitted_artifact.get("artifact"):
@@ -312,6 +320,7 @@ def execute_run(
         "created_at": created_at,
         "updated_at": created_at,
         "agent_profile": agent_path,
+        "agent_architecture": resolved_architecture,
         "model_name": spec.name,
         "model_name_or_path": model_name_or_path,
         "benchmark_name": benchmark_name,

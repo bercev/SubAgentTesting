@@ -7,6 +7,7 @@ Scope covered in this file:
 - `profiles/agents/*`
 - `profiles/runs/*`
 - `profiles/prompts/*`
+- `agent_architectures/*`
 - `runtime/*`
 - `benchmarks/*`
 - `external/*` (third-party harnesses/assets used during eval)
@@ -108,6 +109,14 @@ flowchart TD
 - Runtime loop/tooling: `runtime/agent_runtime.py`, `runtime/tools.py`, `runtime/artifact_policy.py`.
 - Config and limits: `runtime/config_models.py`, `runtime/config_loader.py`.
 - Artifact lifecycle and evaluation state: `runtime/run_service.py`, `runtime/eval_service.py`, `runtime/manifest_store.py`, `runtime/metrics.py`.
+
+### Pluggable agent architectures
+- Selector fields:
+  - Agent profile: `agent_architecture` (`none`, `mini-swe-agent`)
+  - Run config: `runtime.agent_architecture_override`
+  - CLI override: `agent run --agent-architecture ...` (highest precedence)
+- Architecture implementations live under `agent_architectures/` and expose a shared `run_task(...)` interface.
+- `none` preserves existing runtime behavior; `mini-swe-agent` runs the mini control loop while keeping existing artifact/telemetry contracts.
 
 ## Complete File Index (Concise)
 | File | Responsibility | Edit When |

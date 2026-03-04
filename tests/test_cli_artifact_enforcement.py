@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 import typer
 
+from agent_architectures.constants import ARCHITECTURE_NONE
 import scripts.cli as cli
 import runtime.eval_service as eval_service
 import runtime.run_service as run_service
@@ -91,6 +92,9 @@ def _run_once(
     runtime_init_capture: dict | None = None,
     full_log_previews: bool = False,
     build_backend_capture: dict | None = None,
+    agent_architecture: str | None = None,
+    runtime_agent_architecture_override: str | None = None,
+    profile_agent_architecture: str = ARCHITECTURE_NONE,
     workspace_tools_ready: bool = True,
     workspace_kind: str = "repo_checkout",
     workspace_reason: str | None = None,
@@ -114,6 +118,7 @@ def _run_once(
                 "selector": 1,
                 "max_tool_calls": 1,
                 "max_wall_time_s": 10,
+                "agent_architecture_override": runtime_agent_architecture_override,
             },
             "output": {
                 "artifacts_dir": str(tmp_path / "artifacts"),
@@ -130,6 +135,8 @@ def _run_once(
         tool_to_skill_map={},
         termination={"tool": "submit", "output_type": "patch"},
         decoding_defaults={},
+        agent_architecture=profile_agent_architecture,
+        agent_architecture_config={},
     )
 
     _FakeAdapter._workspace_root = Path(".")
@@ -137,23 +144,17 @@ def _run_once(
     _FakeAdapter._workspace_kind = workspace_kind
     _FakeAdapter._workspace_reason = workspace_reason
 
-    class _FakeRuntime:
-        def __init__(self, *args, **kwargs):
+    class _FakeArchitecture:
+        def run_task(self, request):
             if runtime_init_capture is not None:
-                runtime_init_capture["kwargs"] = kwargs
-
-        def run(self, task, system_prompt, initial_user_message, tool_schemas, decoding_defaults=None):
-            if runtime_init_capture is not None:
-                runtime_init_capture["run_args"] = {
-                    "system_prompt": system_prompt,
-                    "initial_user_message": initial_user_message,
-                    "tool_schemas": tool_schemas,
-                }
+                runtime_init_capture["request"] = request
+            if build_backend_capture is not None:
+                build_backend_capture["request"] = request
             metadata = {"terminated": True, "repo": "astropy/astropy"}
             if runtime_tool_payload is not None:
                 metadata["tool_quality_runtime"] = runtime_tool_payload
             return AgentResult(
-                task_id=task.task_id,
+                task_id=request.task.task_id,
                 final_artifact=raw_artifact,
                 metadata=metadata,
             )
@@ -168,18 +169,19 @@ def _run_once(
             set() if loader_allowed_tools is _UNSET else loader_allowed_tools,
         ),
     )
-    def _fake_build_backend(*args, **kwargs):
+    def _fake_get_agent_architecture(name: str):
+        if runtime_init_capture is not None:
+            runtime_init_capture["resolved_architecture"] = name
         if build_backend_capture is not None:
-            build_backend_capture["args"] = args
-            build_backend_capture["kwargs"] = kwargs
-        return object()
+            build_backend_capture["resolved_architecture"] = name
+        return _FakeArchitecture()
 
-    monkeypatch.setattr(run_service, "build_backend", _fake_build_backend)
-    monkeypatch.setattr(run_service, "AgentRuntime", _FakeRuntime)
+    monkeypatch.setattr(run_service, "get_agent_architecture", _fake_get_agent_architecture)
 
     outcome = run_service.execute_run(
         agent_path="profiles/agents/qwen3_coder_free.yaml",
         config=run_config,
+        agent_architecture=agent_architecture,
         verbose=verbose,
         full_log_previews=full_log_previews,
     )
@@ -204,7 +206,7 @@ def test_run_service_tools_enabled_preserves_explicit_empty_allowlist(monkeypatc
         runtime_init_capture=captured,
     )
 
-    assert captured["kwargs"]["allowed_tools"] == set()
+    assert captured["request"].allowed_tools == set()
 
 
 def test_run_service_tools_enabled_uses_full_fallback_when_allowlist_is_none(monkeypatch, tmp_path: Path):
@@ -218,10 +220,60 @@ def test_run_service_tools_enabled_uses_full_fallback_when_allowlist_is_none(mon
         runtime_init_capture=captured,
     )
 
-    allowed_tools = captured["kwargs"]["allowed_tools"]
+    allowed_tools = captured["request"].allowed_tools
     assert isinstance(allowed_tools, set)
     assert "submit" in allowed_tools
     assert "bash" in allowed_tools
+
+
+def test_run_service_architecture_precedence_cli_override(monkeypatch, tmp_path: Path):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        runtime_init_capture=captured,
+        agent_architecture="mini-swe-agent",
+        runtime_agent_architecture_override="none",
+        profile_agent_architecture="none",
+    )
+    assert captured["resolved_architecture"] == "mini-swe-agent"
+
+
+def test_run_service_architecture_precedence_run_override(monkeypatch, tmp_path: Path):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        runtime_init_capture=captured,
+        runtime_agent_architecture_override="mini-swe-agent",
+        profile_agent_architecture="none",
+    )
+    assert captured["resolved_architecture"] == "mini-swe-agent"
+
+
+def test_run_service_architecture_precedence_profile_default(monkeypatch, tmp_path: Path):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        runtime_init_capture=captured,
+        profile_agent_architecture="mini-swe-agent",
+    )
+    assert captured["resolved_architecture"] == "mini-swe-agent"
+
+
+def test_run_service_architecture_defaults_to_none(monkeypatch, tmp_path: Path):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        runtime_init_capture=captured,
+    )
+    assert captured["resolved_architecture"] == "none"
 
 
 def test_run_service_preserves_invalid_patch_output(monkeypatch, tmp_path: Path):
@@ -390,6 +442,54 @@ def test_cli_predict_forwards_full_log_previews_flag(monkeypatch):
     assert captured["full_log_previews"] is True
 
 
+def test_cli_run_forwards_agent_architecture_override(monkeypatch, capsys):
+    captured: dict = {}
+    fake_run_outcome = run_service.RunOutcome(
+        run_id="2026-02-24_120000",
+        benchmark_name="swebench_verified",
+        split_name="test",
+        mode_name="patch_only",
+        tasks_total=1,
+        valid_artifacts=1,
+        invalid_artifacts=0,
+        model_name_or_path="openrouter/free",
+        predictions_path=Path("artifacts/2026-02-24_120000/predictions.jsonl"),
+        manifest_path=Path("artifacts/2026-02-24_120000/manifest.json"),
+        run_log_path=Path("artifacts/2026-02-24_120000/run.log"),
+        manifest_payload={},
+    )
+
+    monkeypatch.setattr(cli, "load_run_config", lambda _: object())
+    monkeypatch.setattr(cli, "execute_run", lambda **kwargs: captured.update(kwargs) or fake_run_outcome)
+
+    cli.run(
+        agent="a.yaml",
+        run_config="r.yaml",
+        summary=False,
+        agent_architecture="mini-swe-agent",
+    )
+    capsys.readouterr()
+
+    assert captured["agent_architecture"] == "mini-swe-agent"
+
+
+def test_cli_predict_forwards_agent_architecture_override(monkeypatch):
+    captured: dict = {}
+
+    def _fake_run(**kwargs):
+        captured.update(kwargs)
+
+    monkeypatch.setattr(cli, "run", _fake_run)
+    cli.predict(
+        agent="a.yaml",
+        run_config="r.yaml",
+        summary=False,
+        agent_architecture="mini-swe-agent",
+    )
+
+    assert captured["agent_architecture"] == "mini-swe-agent"
+
+
 def test_cli_summarize_run_prints_summary_and_updates_manifest(monkeypatch, tmp_path: Path, capsys):
     run_log_path = tmp_path / "artifacts" / "2026-02-24_120000" / "run.log"
     run_log_path.parent.mkdir(parents=True)
@@ -489,7 +589,7 @@ def test_run_service_artifact_preview_full_when_enabled(monkeypatch, tmp_path: P
     assert "...[truncated]" not in run_log
 
 
-def test_run_service_passes_full_log_previews_to_build_backend(monkeypatch, tmp_path: Path):
+def test_run_service_passes_full_log_previews_to_architecture_request(monkeypatch, tmp_path: Path):
     captured: dict = {}
     _run_once(
         monkeypatch,
@@ -499,7 +599,7 @@ def test_run_service_passes_full_log_previews_to_build_backend(monkeypatch, tmp_
         full_log_previews=True,
         build_backend_capture=captured,
     )
-    assert captured["kwargs"]["full_log_previews"] is True
+    assert captured["request"].full_log_previews is True
 
 
 def test_run_service_builds_tools_mode_initial_user_message_with_workspace_context(
@@ -514,7 +614,7 @@ def test_run_service_builds_tools_mode_initial_user_message_with_workspace_conte
         mode="tools_enabled",
         runtime_init_capture=captured,
     )
-    initial_user_message = captured["run_args"]["initial_user_message"]
+    initial_user_message = captured["request"].initial_user_message
     assert "Fix issue" in initial_user_message
     assert "<workspace_context>" in initial_user_message
     assert "tools_ready: true" in initial_user_message

@@ -6,6 +6,10 @@ End-to-end pipeline for benchmarking code-editing agents on SWE-bench: it bootst
 - Prompt text files live in `profiles/prompts/*.txt`.
 - Execution policy and dataset wiring come from `profiles/runs/*.yaml`.
 - `agent run` produces prediction JSONL files; `agent eval` scores them and stores run artifacts under `artifacts/<run_id>/`.
+- Optional architecture selection:
+  - `agent_architecture: none | mini-swe-agent` in agent YAML
+  - `runtime.agent_architecture_override` in run config
+  - `--agent-architecture` CLI override (highest precedence)
 
 ## Quick Start
 
@@ -45,6 +49,7 @@ Quickstart presets:
 - `profiles/runs/swebench.yaml` for `patch_only` (HF-backed tasks, no local repo workspace needed)
 - `profiles/runs/swebench_tools_hf_astropy.yaml` for `tools_enabled` (HF-backed tasks + local repo checkouts under `./data/swebench_repos/<repo>`, limited to `astropy/astropy`)
 - `profiles/runs/swebench_tools_local.yaml` for `tools_enabled` with a fully local SWE-bench setup (`benchmark.data_root=./data/swebench_local`)
+- `profiles/runs/swebench_mini.yaml` for mini-swe-agent architecture override quickstart
 
 ### 4) Run quick examples (from project root)
 
@@ -71,6 +76,16 @@ agent run \
   --agent profiles/agents/openrouter_free.yaml \
   --run-config profiles/runs/swebench_tools_hf_astropy.yaml \
   --mode tools_enabled \
+  --selector 1
+```
+
+Run using mini-swe-agent architecture via profile (uses `profiles/agents/openrouter_free_mini.yaml`):
+
+```bash
+agent run \
+  --agent profiles/agents/openrouter_free_mini.yaml \
+  --run-config profiles/runs/swebench.yaml \
+  --mode patch_only \
   --selector 1
 ```
 

@@ -6,6 +6,7 @@ from typing import Any, Dict, Literal, Optional
 
 import yaml
 
+from agent_architectures.constants import ARCHITECTURE_NONE, normalize_architecture_id
 from runtime.config_models import RunConfig
 
 
@@ -32,6 +33,7 @@ def default_run_config_dict() -> Dict[str, Any]:
             "selector": 5,
             "max_tool_calls": 20,
             "max_wall_time_s": 600,
+            "agent_architecture_override": None,
             "tool_quality_enabled": True,
             "tool_quality_weights": {
                 "execution_quality": 0.45,
@@ -68,6 +70,22 @@ def _validate_mode(mode_value: str) -> Literal["patch_only", "tools_enabled"]:
     )
 
 
+def _validate_agent_architecture_override(value: Optional[str]) -> Optional[str]:
+    """Validate optional run-level architecture override id."""
+
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("runtime.agent_architecture_override must be a string when provided")
+    if not value.strip():
+        return None
+    normalized = normalize_architecture_id(value)
+    # Explicit 'none' is valid and semantically useful as an override.
+    if normalized == ARCHITECTURE_NONE:
+        return ARCHITECTURE_NONE
+    return normalized
+
+
 def normalize_run_config_dict(raw_config: Dict[str, Any]) -> Dict[str, Any]:
     """Validate nested config shape and merge with canonical defaults."""
 
@@ -90,6 +108,9 @@ def normalize_run_config(raw_config: Dict[str, Any]) -> RunConfig:
     normalized_dict = normalize_run_config_dict(raw_config)
     config = RunConfig.model_validate(normalized_dict)
     config.runtime.mode = _validate_mode(config.runtime.mode)
+    config.runtime.agent_architecture_override = _validate_agent_architecture_override(
+        config.runtime.agent_architecture_override
+    )
     return config
 
 

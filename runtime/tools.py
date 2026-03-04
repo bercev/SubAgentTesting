@@ -174,12 +174,10 @@ class ToolRegistry:
         if not isinstance(arguments, dict):
             return {"error": f"invalid arguments for {name}: expected object payload"}
         normalized_arguments = dict(arguments)
-        if (
-            name == "bash"
-            and "cmd" not in normalized_arguments
-            and isinstance(normalized_arguments.get("command"), str)
-        ):
-            normalized_arguments["cmd"] = normalized_arguments["command"]
+        if name == "bash" and "command" in normalized_arguments:
+            if "cmd" not in normalized_arguments and isinstance(normalized_arguments.get("command"), str):
+                normalized_arguments["cmd"] = normalized_arguments["command"]
+            normalized_arguments.pop("command", None)
         try:
             return self._tools[name](**normalized_arguments)
         except TypeError as exc:
