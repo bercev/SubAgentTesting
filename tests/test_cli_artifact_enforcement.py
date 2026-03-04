@@ -404,6 +404,21 @@ def test_run_service_preserves_valid_patch_output(monkeypatch, tmp_path: Path):
     assert record["model_patch"] == valid_patch
 
 
+def test_run_service_normalizes_valid_patch_missing_trailing_newline(monkeypatch, tmp_path: Path):
+    raw_patch = (
+        "diff --git a/example.py b/example.py\n"
+        "index 1111111..2222222 100644\n"
+        "--- a/example.py\n"
+        "+++ b/example.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new"
+    )
+    record, _ = _run_once(monkeypatch, tmp_path, raw_artifact=raw_patch)
+    assert record["model_patch"] == raw_patch + "\n"
+    assert record["model_patch"].endswith("\n")
+
+
 def test_run_service_creates_manifest(monkeypatch, tmp_path: Path):
     record, outcome = _run_once(monkeypatch, tmp_path, raw_artifact="")
     payload = json.loads(outcome.manifest_path.read_text(encoding="utf-8"))

@@ -149,6 +149,91 @@ def test_run_harness_relocates_with_instance_collision(monkeypatch, tmp_path: Pa
     assert (dest_root / "same-instance__model-b").exists()
 
 
+def test_build_command_uses_shadow_predictions_when_patch_missing_trailing_newline(tmp_path: Path):
+    workdir = tmp_path / "work"
+    workdir.mkdir(parents=True)
+    eval_root = tmp_path / "external" / "SWE-bench"
+    eval_root.mkdir(parents=True)
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    predictions_path = tmp_path / "predictions.jsonl"
+    raw_patch = (
+        "diff --git a/a.py b/a.py\n"
+        "--- a/a.py\n"
+        "+++ b/a.py\n"
+        "@@ -1 +1 @@\n"
+        "-a\n"
+        "+b"
+    )
+    predictions_path.write_text(
+        json.dumps(
+            {
+                "instance_id": "astropy__astropy-12907",
+                "model_patch": raw_patch,
+                "model_name_or_path": "qwen/qwen3-coder:free",
+                "model_name": "qwen3-coder-free",
+                "repo": "astropy/astropy",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = _run_config(artifacts_dir=artifacts_dir, eval_root=eval_root, workdir=workdir)
+    evaluator = SWEbenchEvaluator()
+    run_id = "2026-02-13_010204"
+    cmd = evaluator.build_command(predictions_path=predictions_path, run_id=run_id, config=cfg)
+
+    shadow_path = artifacts_dir / run_id / "predictions.for_harness.jsonl"
+    assert shadow_path.exists() is True
+    assert f"-p {shadow_path.resolve()} " in cmd
+
+    original_record = json.loads(predictions_path.read_text(encoding="utf-8").strip())
+    shadow_record = json.loads(shadow_path.read_text(encoding="utf-8").strip())
+    assert original_record["model_patch"] == raw_patch
+    assert shadow_record["model_patch"] == raw_patch + "\n"
+
+
+def test_build_command_uses_original_predictions_when_patch_is_already_normalized(tmp_path: Path):
+    workdir = tmp_path / "work"
+    workdir.mkdir(parents=True)
+    eval_root = tmp_path / "external" / "SWE-bench"
+    eval_root.mkdir(parents=True)
+    artifacts_dir = tmp_path / "artifacts"
+    artifacts_dir.mkdir(parents=True)
+    predictions_path = tmp_path / "predictions.jsonl"
+    normalized_patch = (
+        "diff --git a/a.py b/a.py\n"
+        "--- a/a.py\n"
+        "+++ b/a.py\n"
+        "@@ -1 +1 @@\n"
+        "-a\n"
+        "+b\n"
+    )
+    predictions_path.write_text(
+        json.dumps(
+            {
+                "instance_id": "astropy__astropy-12907",
+                "model_patch": normalized_patch,
+                "model_name_or_path": "qwen/qwen3-coder:free",
+                "model_name": "qwen3-coder-free",
+                "repo": "astropy/astropy",
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    cfg = _run_config(artifacts_dir=artifacts_dir, eval_root=eval_root, workdir=workdir)
+    evaluator = SWEbenchEvaluator()
+    run_id = "2026-02-13_010205"
+    cmd = evaluator.build_command(predictions_path=predictions_path, run_id=run_id, config=cfg)
+
+    shadow_path = artifacts_dir / run_id / "predictions.for_harness.jsonl"
+    assert shadow_path.exists() is False
+    assert f"-p {predictions_path.resolve()} " in cmd
+
+
 def test_run_harness_fails_when_model_name_or_path_missing(tmp_path: Path):
     workdir = tmp_path / "work"
     workdir.mkdir(parents=True)

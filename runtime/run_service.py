@@ -320,8 +320,11 @@ def execute_run(
 
             policy_result = apply_artifact_policy(result.final_artifact, task.expected_output_type)
             artifact = result.final_artifact
-            # Patch output remains pass-through; non-patch outputs use normalized artifact.
-            if task.expected_output_type != "patch":
+            if task.expected_output_type == "patch":
+                # Keep raw invalid patch output for diagnostics, but persist normalized valid patches.
+                if policy_result.valid:
+                    artifact = policy_result.artifact
+            else:
                 artifact = policy_result.artifact
             append_log(
                 run_log_path,

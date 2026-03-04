@@ -20,14 +20,44 @@ class SWEbenchEvaluator(BaseHarnessEvaluator):
         run_root = Path(config.output.artifacts_dir) / run_id
         abs_predictions = predictions_path.resolve()
         self._validate_predictions_schema(abs_predictions)
+        harness_predictions = self._prepare_harness_predictions(
+            predictions_path=abs_predictions, run_root=run_root
+        )
         return (
             f"{config.evaluation.harness_cmd} "
             f"-d {config.benchmark.dataset_name} "
             f"-s {config.benchmark.split} "
-            f"-p {abs_predictions} "
+            f"-p {harness_predictions.resolve()} "
             f"-id {run_id} "
             f"--report_dir {run_root.resolve()}"
         )
+
+    def _prepare_harness_predictions(self, predictions_path: Path, run_root: Path) -> Path:
+        """Create a normalized shadow predictions file only when patch newlines are missing."""
+
+        changed = False
+        output_lines: list[str] = []
+        with predictions_path.open("r", encoding="utf-8") as f:
+            for line in f:
+                if not line.strip():
+                    output_lines.append(line)
+                    continue
+                rec = json.loads(line)
+                model_patch = rec.get("model_patch") if isinstance(rec, dict) else None
+                if isinstance(model_patch, str) and model_patch and not model_patch.endswith("\n"):
+                    rec = dict(rec)
+                    rec["model_patch"] = model_patch + "\n"
+                    line = json.dumps(rec) + "\n"
+                    changed = True
+                output_lines.append(line)
+
+        if not changed:
+            return predictions_path
+
+        shadow_predictions = run_root / "predictions.for_harness.jsonl"
+        shadow_predictions.parent.mkdir(parents=True, exist_ok=True)
+        shadow_predictions.write_text("".join(output_lines), encoding="utf-8")
+        return shadow_predictions
 
     def _validate_predictions_schema(self, predictions_path: Path) -> None:
         """Require `model_name_or_path` on every prediction row before harness run."""
