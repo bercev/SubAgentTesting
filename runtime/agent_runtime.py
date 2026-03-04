@@ -86,8 +86,11 @@ class AgentRuntime:
         wall_time_exhausted = False
         termination_ack = False
         tool_call_events: List[Dict[str, Any]] = []
+        invalid_submit_attempts = 0
+        last_invalid_submit_reason: Optional[str] = None
 
         while True:
+            halt_invalid_submission = False
             # Enforce wall-clock and tool-call budgets before each model turn.
             if time.monotonic() - start > self.max_wall_time_s:
                 wall_time_exhausted = True
@@ -188,6 +191,12 @@ class AgentRuntime:
                     error_code = "execution_exception"
                     success = False
                 elif isinstance(tool_result, dict):
+                    invalid_attempts = tool_result.get("invalid_submit_attempts")
+                    if isinstance(invalid_attempts, int):
+                        invalid_submit_attempts = max(invalid_submit_attempts, invalid_attempts)
+                    invalid_reason = tool_result.get("invalid_submission_reason")
+                    if isinstance(invalid_reason, str) and invalid_reason:
+                        last_invalid_submit_reason = invalid_reason
                     if "error" in tool_result:
                         error_code = "tool_error"
                         success = False
@@ -221,19 +230,21 @@ class AgentRuntime:
                 if execution_exception is not None:
                     continue
 
-                if (
-                    tc.name == self.termination_tool
-                    and isinstance(tool_result, dict)
-                    and tool_result.get("submitted")
-                ):
-                    # The configured termination tool is the explicit stop signal.
-                    final_artifact = tc.arguments.get("final_artifact", "")
-                    terminated = True
-                    termination_ack = True
-                    loop_exit_reason = "submitted"
-                    break
+                if tc.name == self.termination_tool and isinstance(tool_result, dict):
+                    invalid_terminal_reason = tool_result.get("invalid_submission_terminal_reason")
+                    if isinstance(invalid_terminal_reason, str) and invalid_terminal_reason:
+                        loop_exit_reason = invalid_terminal_reason
+                        halt_invalid_submission = True
+                        break
+                    if tool_result.get("submitted"):
+                        # The configured termination tool is the explicit stop signal.
+                        final_artifact = tc.arguments.get("final_artifact", "")
+                        terminated = True
+                        termination_ack = True
+                        loop_exit_reason = "submitted"
+                        break
 
-            if terminated:
+            if terminated or halt_invalid_submission:
                 break
 
             turn_index += 1
@@ -244,6 +255,8 @@ class AgentRuntime:
 
         metadata = {
             "terminated": terminated,
+            "invalid_submit_attempts": invalid_submit_attempts,
+            "last_invalid_submit_reason": last_invalid_submit_reason,
             "tool_quality_runtime": {
                 "mode": self.mode_name,
                 "loop_exit_reason": loop_exit_reason,

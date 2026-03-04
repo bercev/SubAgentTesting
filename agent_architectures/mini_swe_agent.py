@@ -20,7 +20,10 @@ from agent_architectures.telemetry_adapter import (
 
 
 def _import_mini_components() -> tuple[Any, Any, Any, Any, Any]:
-    """Import mini-swe-agent runtime components lazily."""
+    """Import mini-swe-agent runtime components lazily.
+
+    Supports both legacy (<2.x) and v2+ package layouts.
+    """
 
     try:
         mini_module = importlib.import_module("minisweagent")
@@ -34,24 +37,89 @@ def _import_mini_components() -> tuple[Any, Any, Any, Any, Any]:
     except ImportError as exc:
         raise RuntimeError("Failed to import minisweagent.exceptions") from exc
 
-    required_names = (
-        "AgentConfig",
-        "AgentRunConfig",
-        "DefaultAgent",
-    )
-    missing = [name for name in required_names if not hasattr(mini_module, name)]
-    if missing:
-        raise RuntimeError(
-            "mini-swe-agent import is missing required symbols: " + ", ".join(missing)
-        )
-
     if not hasattr(exceptions_module, "Submitted") or not hasattr(exceptions_module, "LimitsExceeded"):
         raise RuntimeError("mini-swe-agent exceptions module is missing Submitted/LimitsExceeded")
 
+    # Legacy exports (pre-v2) were available at top-level.
+    legacy_names = ("AgentConfig", "AgentRunConfig", "DefaultAgent")
+    if all(hasattr(mini_module, name) for name in legacy_names):
+        return (
+            mini_module.AgentConfig,
+            mini_module.AgentRunConfig,
+            mini_module.DefaultAgent,
+            exceptions_module.Submitted,
+            exceptions_module.LimitsExceeded,
+        )
+
+    # mini-swe-agent v2+ moved implementations under minisweagent.agents.default.
+    try:
+        default_agent_module = importlib.import_module("minisweagent.agents.default")
+    except ImportError as exc:
+        raise RuntimeError(
+            "mini-swe-agent import is missing both legacy top-level symbols and "
+            "v2 default agent module."
+        ) from exc
+
+    if not hasattr(default_agent_module, "AgentConfig") or not hasattr(
+        default_agent_module, "DefaultAgent"
+    ):
+        raise RuntimeError(
+            "mini-swe-agent v2 import is missing required symbols: "
+            "minisweagent.agents.default.AgentConfig/DefaultAgent"
+        )
+
+    v2_agent_config_cls = default_agent_module.AgentConfig
+    v2_default_agent_cls = default_agent_module.DefaultAgent
+
+    @dataclass
+    class _CompatRunConfig:
+        step_limit: int
+
+    class _CompatDefaultAgent:
+        """Adapt v2 DefaultAgent signature to the legacy runner contract."""
+
+        def __init__(self, *, model: Any, environment: Any, config: Any, run_config: Any) -> None:
+            config_kwargs: dict[str, Any] = {}
+            if hasattr(config, "model_dump") and callable(config.model_dump):
+                dumped = config.model_dump()
+                if isinstance(dumped, dict):
+                    config_kwargs.update(dumped)
+            elif isinstance(config, Mapping):
+                config_kwargs.update(config)
+            else:
+                for key in ("system_template", "instance_template"):
+                    value = getattr(config, key, None)
+                    if isinstance(value, str):
+                        config_kwargs[key] = value
+
+            # Legacy adapter config used "{instruction}" placeholder; mini-swe-agent v2
+            # uses Jinja templates and passes task text as "{{task}}".
+            instance_template = config_kwargs.get("instance_template")
+            if isinstance(instance_template, str):
+                config_kwargs["instance_template"] = instance_template.replace(
+                    "{instruction}",
+                    "{{task}}",
+                )
+
+            step_limit = getattr(run_config, "step_limit", 0)
+            if isinstance(step_limit, int):
+                config_kwargs["step_limit"] = max(1, step_limit)
+
+            self._delegate = v2_default_agent_cls(model, environment, **config_kwargs)
+
+        def run(self, instance_args: Any) -> dict[str, Any]:
+            instruction = ""
+            if isinstance(instance_args, Mapping):
+                raw = instance_args.get("instruction", "")
+                instruction = raw if isinstance(raw, str) else str(raw)
+            elif isinstance(instance_args, str):
+                instruction = instance_args
+            return self._delegate.run(task=instruction, instruction=instruction)
+
     return (
-        mini_module.AgentConfig,
-        mini_module.AgentRunConfig,
-        mini_module.DefaultAgent,
+        v2_agent_config_cls,
+        _CompatRunConfig,
+        _CompatDefaultAgent,
         exceptions_module.Submitted,
         exceptions_module.LimitsExceeded,
     )
@@ -69,6 +137,8 @@ class _MiniRunState:
     termination_ack: bool = False
     loop_exit_reason: str = "unknown"
     submitted_artifact: str = ""
+    invalid_submit_attempts: int = 0
+    last_invalid_submit_reason: str = ""
 
 
 class _MiniFunctionCallingModel:
@@ -98,7 +168,8 @@ class _MiniFunctionCallingModel:
             "tool_count": len(self._tool_schemas),
         }
 
-    def get_template_vars(self) -> dict[str, Any]:
+    def get_template_vars(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
         return {}
 
     def format_message(self, **kwargs: Any) -> dict[str, Any]:
@@ -128,7 +199,8 @@ class _MiniFunctionCallingModel:
             }
         )
 
-    def query(self, messages: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    def query(self, messages: Sequence[Mapping[str, Any]], **kwargs: Any) -> dict[str, Any]:
+        del kwargs
         backend_messages = self._sanitize_messages(messages)
         result = self._backend.generate(
             backend_messages,
@@ -237,6 +309,10 @@ class _MiniToolEnvironment:
             "allowed_tools": sorted(self._allowed_tools),
         }
 
+    def get_template_vars(self, **kwargs: Any) -> dict[str, Any]:
+        del kwargs
+        return {}
+
     def setup(self) -> None:
         return None
 
@@ -268,7 +344,8 @@ class _MiniToolEnvironment:
             self._run_state.budget_exhausted = True
             self._raise_limits_exceeded("tool_budget_exhausted")
 
-    def execute(self, action: Mapping[str, Any]) -> Dict[str, Any]:
+    def execute(self, action: Mapping[str, Any], cwd: str = "") -> Dict[str, Any]:
+        del cwd
         self._enforce_limits()
 
         tool_name = action.get("tool_name")
@@ -324,6 +401,15 @@ class _MiniToolEnvironment:
             success = False
             error_code = "execution_exception"
         elif isinstance(tool_result, dict):
+            invalid_attempts = tool_result.get("invalid_submit_attempts")
+            if isinstance(invalid_attempts, int):
+                self._run_state.invalid_submit_attempts = max(
+                    self._run_state.invalid_submit_attempts,
+                    invalid_attempts,
+                )
+            invalid_reason = tool_result.get("invalid_submission_reason")
+            if isinstance(invalid_reason, str) and invalid_reason:
+                self._run_state.last_invalid_submit_reason = invalid_reason
             if "error" in tool_result:
                 success = False
                 error_code = "tool_error"
@@ -348,26 +434,26 @@ class _MiniToolEnvironment:
         )
         self._run_state.events.append(event)
 
-        if (
-            tool_name == self._termination_tool
-            and isinstance(tool_result, Mapping)
-            and bool(tool_result.get("submitted"))
-        ):
-            final_artifact = arguments.get("final_artifact", "")
-            artifact_text = final_artifact if isinstance(final_artifact, str) else ""
-            self._run_state.submitted_artifact = artifact_text
-            self._run_state.termination_ack = True
-            self._run_state.loop_exit_reason = "submitted"
-            raise self._submitted_exc(
-                {
-                    "role": "exit",
-                    "content": "submitted",
-                    "extra": {
-                        "exit_status": "Submitted",
-                        "submission": artifact_text,
-                    },
-                }
-            )
+        if tool_name == self._termination_tool and isinstance(tool_result, Mapping):
+            invalid_terminal_reason = tool_result.get("invalid_submission_terminal_reason")
+            if isinstance(invalid_terminal_reason, str) and invalid_terminal_reason:
+                self._raise_limits_exceeded(invalid_terminal_reason)
+            if bool(tool_result.get("submitted")):
+                final_artifact = arguments.get("final_artifact", "")
+                artifact_text = final_artifact if isinstance(final_artifact, str) else ""
+                self._run_state.submitted_artifact = artifact_text
+                self._run_state.termination_ack = True
+                self._run_state.loop_exit_reason = "submitted"
+                raise self._submitted_exc(
+                    {
+                        "role": "exit",
+                        "content": "submitted",
+                        "extra": {
+                            "exit_status": "Submitted",
+                            "submission": artifact_text,
+                        },
+                    }
+                )
 
         return dict(tool_result) if isinstance(tool_result, Mapping) else {"result": tool_result}
 
@@ -431,11 +517,17 @@ class MiniSweAgentArchitecture(AgentArchitecture):
 
         final_artifact = run_state.submitted_artifact
         if not final_artifact and isinstance(run_result, Mapping):
-            extra = run_result.get("extra")
-            if isinstance(extra, Mapping):
-                submission = extra.get("submission")
-                if isinstance(submission, str):
-                    final_artifact = submission
+            # mini-swe-agent v2 returns {"submission": "...", ...}
+            direct_submission = run_result.get("submission")
+            if isinstance(direct_submission, str):
+                final_artifact = direct_submission
+            else:
+                # legacy integrations often nested this under extra.submission
+                extra = run_result.get("extra")
+                if isinstance(extra, Mapping):
+                    submission = extra.get("submission")
+                    if isinstance(submission, str):
+                        final_artifact = submission
 
         if run_state.loop_exit_reason == "unknown":
             if run_state.termination_ack:
@@ -447,6 +539,8 @@ class MiniSweAgentArchitecture(AgentArchitecture):
 
         metadata: Dict[str, Any] = {
             "terminated": run_state.termination_ack,
+            "invalid_submit_attempts": run_state.invalid_submit_attempts,
+            "last_invalid_submit_reason": run_state.last_invalid_submit_reason or None,
             "tool_quality_runtime": build_runtime_payload(
                 mode_name=request.mode_name,
                 loop_exit_reason=run_state.loop_exit_reason,

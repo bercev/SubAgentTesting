@@ -385,6 +385,8 @@ def _format_terminal_lines(summary: Dict[str, Any], manifest: Dict[str, Any]) ->
                 f" artifact_valid={item.get('artifact_valid')}"
                 f" reason={item.get('artifact_reason')}"
                 f" artifact_bytes={item.get('artifact_bytes')}"
+                f" invalid_submit_attempts={item.get('invalid_submit_attempts')}"
+                f" last_invalid_submit_reason={item.get('last_invalid_submit_reason')}"
             )
         if len(per_task) > 10:
             lines.append(f"  ... {len(per_task) - 10} more tasks")
@@ -563,6 +565,8 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
                     "artifact_reason": None,
                     "artifact_bytes": None,
                     "artifact_log_level": None,
+                    "invalid_submit_attempts": 0,
+                    "last_invalid_submit_reason": None,
                 },
             )
 
@@ -576,6 +580,8 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
             terminated = _to_bool(_extract_value(message, "terminated"))
             artifact_valid = _to_bool(_extract_value(message, "artifact_valid"))
             artifact_reason = _extract_value(message, "artifact_reason")
+            invalid_submit_attempts = _to_int(_extract_value(message, "invalid_submit_attempts"))
+            last_invalid_submit_reason = _extract_value(message, "last_invalid_submit_reason")
             if terminated is not None or artifact_valid is not None or artifact_reason is not None:
                 task_entry["completed_at"] = timestamp_text
                 if terminated is not None:
@@ -584,6 +590,12 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
                     task_entry["artifact_valid"] = artifact_valid
                 if artifact_reason is not None:
                     task_entry["artifact_reason"] = artifact_reason
+            if invalid_submit_attempts is not None:
+                task_entry["invalid_submit_attempts"] = invalid_submit_attempts
+            if last_invalid_submit_reason is not None:
+                task_entry["last_invalid_submit_reason"] = (
+                    None if last_invalid_submit_reason == "none" else last_invalid_submit_reason
+                )
 
         event_name = _event_name(message)
         if event_name == "api_request":
@@ -667,6 +679,8 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
     artifact_valid_unknown = 0
     terminated_true = 0
     terminated_false = 0
+    invalid_submit_attempts_total = 0
+    tasks_with_invalid_submit = 0
 
     for item in per_task:
         if item.get("artifact_valid") is True:
@@ -682,6 +696,11 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
         reason = item.get("artifact_reason")
         if isinstance(reason, str) and reason:
             artifact_reason_counts[reason] += 1
+        attempts = item.get("invalid_submit_attempts")
+        if isinstance(attempts, int):
+            invalid_submit_attempts_total += max(0, attempts)
+            if attempts > 0:
+                tasks_with_invalid_submit += 1
 
     prompt_tokens_total = sum(item["prompt_tokens"] or 0 for item in usage_rows)
     completion_tokens_total = sum(item["completion_tokens"] or 0 for item in usage_rows)
@@ -755,6 +774,8 @@ def execute_run_log_summary(*, run_log_path: Path) -> RunLogSummaryOutcome:
             "artifact_valid_false": artifact_valid_false,
             "artifact_valid_unknown": artifact_valid_unknown,
             "artifact_reason_counts": dict(sorted(artifact_reason_counts.items())),
+            "invalid_submit_attempts_total": invalid_submit_attempts_total,
+            "tasks_with_invalid_submit": tasks_with_invalid_submit,
             "per_task": per_task,
         },
         "api": {

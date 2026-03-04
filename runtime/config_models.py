@@ -69,6 +69,8 @@ class RuntimeConfig(BaseModel):
     selector: Optional[int] = 5
     max_tool_calls: int = 20
     max_wall_time_s: int = 600
+    patch_submit_policy: Literal["allow", "reject_retry", "reject_fast"] = "allow"
+    max_invalid_submit_attempts: int = Field(default=3, ge=1)
     agent_architecture_override: Optional[str] = None
     tool_quality_enabled: bool = True
     tool_quality_weights: ToolQualityWeights = Field(default_factory=ToolQualityWeights)

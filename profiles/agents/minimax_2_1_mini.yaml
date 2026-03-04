@@ -1,0 +1,34 @@
+name: minimax2.1
+backend:
+  type: openrouter
+  model: minimax/minimax-m2.1
+  max_retries: 10
+  initial_backoff_s: 0.5
+  max_backoff_s: 4.0
+prompt_file: ../prompts/engineering_agent_v2.txt
+
+agent_architecture: mini-swe-agent
+agent_architecture_config: {}
+
+tools:
+  - bash
+  - submit
+  - workspace_apply_patch
+  - workspace_list
+  - workspace_open
+  - workspace_search
+  - workspace_write
+skills:
+  - tool-use-protocol
+  - repo-triage
+  - diff-hygiene
+  - test-triage-loop
+
+tool_to_skill_map: {}
+termination:
+  tool: submit
+  output_type: patch
+decoding_defaults:
+  temperature: 0.1
+  top_p: 0.95
+  max_tokens: 8192

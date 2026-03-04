@@ -5,8 +5,9 @@ import subprocess
 import tempfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from runtime.artifact_policy import apply_artifact_policy
 
 DEFAULT_OPEN_MAX_LINES = 250
 MAX_OPEN_RANGE_LINES = 400
@@ -17,7 +18,12 @@ class ToolContext:
     """Execution context shared by all tool handlers."""
 
     workspace_root: Path
-    submit_callback: Optional[callable] = None
+    submit_callback: Optional[Callable[[str], None]] = None
+    expected_output_type: str = "patch"
+    patch_submit_policy: str = "allow"
+    max_invalid_submit_attempts: int = 3
+    invalid_submit_attempts: int = 0
+    last_invalid_submit_reason: Optional[str] = None
     bash_timeout_s: int = 60
     output_truncate: int = 4000
     search_exclude_dirnames: Tuple[str, ...] = (
@@ -332,6 +338,63 @@ class ToolRegistry:
     def submit(self, final_artifact: str) -> Dict[str, Any]:
         """Signal task completion and forward final artifact to runtime callback."""
 
+        artifact = final_artifact if isinstance(final_artifact, str) else str(final_artifact)
+        output_type = (self.ctx.expected_output_type or "text").strip().lower()
+        submit_policy = (self.ctx.patch_submit_policy or "allow").strip().lower()
+
+        if output_type == "patch":
+            policy_result = apply_artifact_policy(artifact, "patch")
+            if policy_result.valid:
+                normalized = policy_result.artifact
+                if self.ctx.submit_callback:
+                    self.ctx.submit_callback(normalized)
+                return {
+                    "submitted": True,
+                    "artifact_preview": normalized[:2000],
+                    "artifact_bytes": len(normalized.encode("utf-8", errors="ignore")),
+                }
+
+            self.ctx.last_invalid_submit_reason = policy_result.reason
+
+            if submit_policy == "allow":
+                if self.ctx.submit_callback:
+                    self.ctx.submit_callback(artifact)
+                return {
+                    "submitted": True,
+                    "artifact_preview": artifact[:2000],
+                    "artifact_bytes": len(artifact.encode("utf-8", errors="ignore")),
+                    "submission_warning": f"invalid_patch:{policy_result.reason}",
+                    "invalid_submission_reason": policy_result.reason,
+                }
+
+            self.ctx.invalid_submit_attempts += 1
+            max_attempts = max(1, int(self.ctx.max_invalid_submit_attempts))
+            exhausted = self.ctx.invalid_submit_attempts >= max_attempts
+            terminal_reason: Optional[str] = None
+            if submit_policy == "reject_fast":
+                terminal_reason = "invalid_submission_fast_fail"
+            elif submit_policy == "reject_retry" and exhausted:
+                terminal_reason = "invalid_submission_retries_exhausted"
+
+            result: Dict[str, Any] = {
+                "error": (
+                    "invalid patch submission "
+                    f"(reason={policy_result.reason}); submit a unified diff starting with 'diff --git'"
+                ),
+                "invalid_submission": True,
+                "invalid_submission_reason": policy_result.reason,
+                "invalid_submit_attempts": self.ctx.invalid_submit_attempts,
+                "max_invalid_submit_attempts": max_attempts,
+                "retryable": terminal_reason is None,
+            }
+            if terminal_reason is not None:
+                result["invalid_submission_terminal_reason"] = terminal_reason
+            return result
+
         if self.ctx.submit_callback:
-            self.ctx.submit_callback(final_artifact)
-        return {"submitted": True, "artifact_preview": final_artifact[:2000]}
+            self.ctx.submit_callback(artifact)
+        return {
+            "submitted": True,
+            "artifact_preview": artifact[:2000],
+            "artifact_bytes": len(artifact.encode("utf-8", errors="ignore")),
+        }

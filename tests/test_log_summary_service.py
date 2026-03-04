@@ -85,7 +85,10 @@ def test_execute_run_log_summary_aggregates_api_usage_and_preserves_manifest(tmp
         ),
         _log_line(
             "2026-02-24 12:00:04",
-            "task=task-1 terminated=True output_type=patch artifact_valid=True artifact_reason=ok",
+            (
+                "task=task-1 terminated=True output_type=patch artifact_valid=True artifact_reason=ok "
+                "invalid_submit_attempts=1 last_invalid_submit_reason=empty_output"
+            ),
         ),
         _log_line(
             "2026-02-24 12:00:05",
@@ -105,6 +108,10 @@ def test_execute_run_log_summary_aggregates_api_usage_and_preserves_manifest(tmp
     assert any(line.startswith("Post-run summary:") for line in outcome.terminal_lines)
     assert any("OpenRouter cost:" in line for line in outcome.terminal_lines)
     assert outcome.summary["tasks"]["artifact_valid_true"] == 1
+    assert outcome.summary["tasks"]["invalid_submit_attempts_total"] == 1
+    assert outcome.summary["tasks"]["tasks_with_invalid_submit"] == 1
+    assert outcome.summary["tasks"]["per_task"][0]["invalid_submit_attempts"] == 1
+    assert outcome.summary["tasks"]["per_task"][0]["last_invalid_submit_reason"] == "empty_output"
     assert outcome.summary["api"]["requests"] == 1
     assert outcome.summary["api"]["responses"] == 1
     assert outcome.summary["api"]["usage_events"] == 1
@@ -236,3 +243,33 @@ def test_execute_run_log_summary_repeated_runs_append_blocks_but_keep_metrics_st
     manifest = json.loads((run_root / "manifest.json").read_text(encoding="utf-8"))
     assert "run_log_summary" in manifest
     assert manifest["run_log_summary"]["run_id"] == run_id
+
+
+def test_execute_run_log_summary_parses_invalid_submit_defaults_as_none(tmp_path: Path):
+    run_id = "2026-02-24_120003"
+    run_root = tmp_path / "artifacts" / run_id
+    run_root.mkdir(parents=True)
+    run_log_path = run_root / "run.log"
+
+    lines = [
+        _log_line(
+            "2026-02-24 12:00:00",
+            "Starting run: run_id=2026-02-24_120003 benchmark=swebench_verified split=test mode=patch_only tasks=1 model=openrouter/free agent_profile=profiles/agents/openrouter_free.yaml",
+        ),
+        _log_line("2026-02-24 12:00:01", "task=task-1 task_start workspace_root=."),
+        _log_line(
+            "2026-02-24 12:00:02",
+            "task=task-1 terminated=True output_type=patch artifact_valid=False artifact_reason=empty_output invalid_submit_attempts=0 last_invalid_submit_reason=none",
+        ),
+        _log_line(
+            "2026-02-24 12:00:03",
+            "Run summary: run_id=2026-02-24_120003 tasks=1 valid_artifacts=0 invalid_artifacts=1",
+        ),
+    ]
+    run_log_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    outcome = execute_run_log_summary(run_log_path=run_log_path)
+    item = outcome.summary["tasks"]["per_task"][0]
+
+    assert item["invalid_submit_attempts"] == 0
+    assert item["last_invalid_submit_reason"] is None

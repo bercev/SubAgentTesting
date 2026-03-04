@@ -40,6 +40,66 @@ def test_normalize_run_config_keeps_params_maps():
     assert cfg.runtime.tool_quality_weights.policy_quality == 0.25
     assert cfg.runtime.tool_quality_weights.termination_quality == 0.20
     assert cfg.runtime.tool_quality_weights.budget_quality == 0.10
+    assert cfg.runtime.patch_submit_policy == "allow"
+    assert cfg.runtime.max_invalid_submit_attempts == 3
+
+
+def test_normalize_run_config_accepts_patch_submit_policy_overrides():
+    cfg = normalize_run_config(
+        {
+            "benchmark": {
+                "name": "swebench_verified",
+                "dataset_name": "SWE-bench/SWE-bench_Verified",
+                "split": "test",
+                "data_source": "hf",
+                "params": {},
+            },
+            "evaluation": {
+                "harness_cmd": "python -m swebench.harness.run_evaluation",
+                "eval_root": "./external/SWE-bench",
+                "workdir": ".",
+                "params": {},
+            },
+            "runtime": {
+                "mode": "patch_only",
+                "selector": 1,
+                "max_tool_calls": 2,
+                "max_wall_time_s": 30,
+                "patch_submit_policy": "reject_retry",
+                "max_invalid_submit_attempts": 4,
+            },
+            "output": {"artifacts_dir": "artifacts"},
+        }
+    )
+    assert cfg.runtime.patch_submit_policy == "reject_retry"
+    assert cfg.runtime.max_invalid_submit_attempts == 4
+
+
+def test_normalize_run_config_rejects_invalid_patch_submit_policy():
+    with pytest.raises(Exception):
+        normalize_run_config(
+            {
+                "benchmark": {
+                    "name": "swebench_verified",
+                    "dataset_name": "SWE-bench/SWE-bench_Verified",
+                    "split": "test",
+                    "data_source": "hf",
+                },
+                "evaluation": {
+                    "harness_cmd": "python -m swebench.harness.run_evaluation",
+                    "eval_root": "./external/SWE-bench",
+                    "workdir": ".",
+                },
+                "runtime": {
+                    "mode": "patch_only",
+                    "selector": 1,
+                    "max_tool_calls": 2,
+                    "max_wall_time_s": 30,
+                    "patch_submit_policy": "bad-policy",
+                },
+                "output": {"artifacts_dir": "artifacts"},
+            }
+        )
 
 
 def test_normalize_run_config_rejects_flat_top_level_keys():

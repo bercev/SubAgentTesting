@@ -53,6 +53,18 @@ class _ExplodingToolRegistry:
         raise RuntimeError("boom")
 
 
+class _SequentialToolRegistry:
+    def __init__(self, outputs: List[Dict[str, Any]]) -> None:
+        self._outputs = list(outputs)
+        self.calls: List[str] = []
+
+    def execute(self, name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+        self.calls.append(name)
+        if not self._outputs:
+            raise AssertionError("Unexpected execute call with no remaining tool outputs")
+        return self._outputs.pop(0)
+
+
 def _task() -> BenchmarkTask:
     return BenchmarkTask(
         task_id="astropy__astropy-12907",
@@ -370,6 +382,98 @@ def test_agent_runtime_patch_only_still_accepts_assistant_text_without_submit():
     assert result.metadata["terminated"] is True
     assert result.final_artifact == "diff --git a/a b/a"
     assert payload["loop_exit_reason"] == "no_tool_calls"
+
+
+def test_agent_runtime_reject_retry_submit_continues_until_valid_submission():
+    backend = _SequenceBackend(
+        [
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[ToolCall(name="submit", arguments={"final_artifact": ""})],
+            ),
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[ToolCall(name="submit", arguments={"final_artifact": "diff --git a/a b/a"})],
+            ),
+        ]
+    )
+    registry = _SequentialToolRegistry(
+        [
+            {
+                "error": "invalid patch submission",
+                "invalid_submission": True,
+                "invalid_submission_reason": "empty_output",
+                "invalid_submit_attempts": 1,
+                "max_invalid_submit_attempts": 3,
+                "retryable": True,
+            },
+            {"submitted": True},
+        ]
+    )
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools={"submit"},
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="patch_only",
+    )
+
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
+    payload = result.metadata["tool_quality_runtime"]
+    events = payload["events"]
+
+    assert result.metadata["terminated"] is True
+    assert result.final_artifact == "diff --git a/a b/a"
+    assert payload["loop_exit_reason"] == "submitted"
+    assert result.metadata["invalid_submit_attempts"] == 1
+    assert result.metadata["last_invalid_submit_reason"] == "empty_output"
+    assert len(events) == 2
+    assert events[0]["success"] is False
+    assert events[1]["success"] is True
+
+
+def test_agent_runtime_reject_retry_terminal_reason_stops_without_termination():
+    backend = _SequenceBackend(
+        [
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[ToolCall(name="submit", arguments={"final_artifact": ""})],
+            ),
+        ]
+    )
+    registry = _SequentialToolRegistry(
+        [
+            {
+                "error": "invalid patch submission",
+                "invalid_submission": True,
+                "invalid_submission_reason": "empty_output",
+                "invalid_submit_attempts": 3,
+                "max_invalid_submit_attempts": 3,
+                "retryable": False,
+                "invalid_submission_terminal_reason": "invalid_submission_retries_exhausted",
+            },
+        ]
+    )
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools={"submit"},
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="patch_only",
+    )
+
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is False
+    assert result.final_artifact == ""
+    assert payload["loop_exit_reason"] == "invalid_submission_retries_exhausted"
+    assert result.metadata["invalid_submit_attempts"] == 3
+    assert result.metadata["last_invalid_submit_reason"] == "empty_output"
 
 
 def test_agent_runtime_serializes_and_truncates_tool_results_in_tool_messages():

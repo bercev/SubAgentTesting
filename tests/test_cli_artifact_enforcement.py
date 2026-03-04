@@ -95,6 +95,8 @@ def _run_once(
     agent_architecture: str | None = None,
     runtime_agent_architecture_override: str | None = None,
     profile_agent_architecture: str = ARCHITECTURE_NONE,
+    patch_submit_policy: str = "allow",
+    max_invalid_submit_attempts: int = 3,
     workspace_tools_ready: bool = True,
     workspace_kind: str = "repo_checkout",
     workspace_reason: str | None = None,
@@ -118,6 +120,8 @@ def _run_once(
                 "selector": 1,
                 "max_tool_calls": 1,
                 "max_wall_time_s": 10,
+                "patch_submit_policy": patch_submit_policy,
+                "max_invalid_submit_attempts": max_invalid_submit_attempts,
                 "agent_architecture_override": runtime_agent_architecture_override,
             },
             "output": {
@@ -626,6 +630,22 @@ def test_run_service_run_log_uses_structured_prefix(monkeypatch, tmp_path: Path)
     assert " | INFO" in first_line
     assert " | run_service.py:" in first_line
     assert " | Starting run:" in first_line
+
+
+def test_run_service_passes_patch_submit_policy_into_tool_context(monkeypatch, tmp_path: Path):
+    captured: dict = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        patch_submit_policy="reject_retry",
+        max_invalid_submit_attempts=5,
+        runtime_init_capture=captured,
+    )
+    ctx = captured["request"].tool_registry.ctx
+    assert ctx.expected_output_type == "patch"
+    assert ctx.patch_submit_policy == "reject_retry"
+    assert ctx.max_invalid_submit_attempts == 5
 
 
 def test_run_service_writes_tool_quality_artifacts_and_logs(monkeypatch, tmp_path: Path):

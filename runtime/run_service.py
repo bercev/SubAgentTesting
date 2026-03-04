@@ -174,7 +174,13 @@ def execute_run(
             def _submit_callback(artifact: str):
                 submitted_artifact["artifact"] = artifact
 
-            tool_ctx = ToolContext(workspace_root=workspace.workspace_root, submit_callback=_submit_callback)
+            tool_ctx = ToolContext(
+                workspace_root=workspace.workspace_root,
+                submit_callback=_submit_callback,
+                expected_output_type=task.expected_output_type,
+                patch_submit_policy=effective_config.runtime.patch_submit_policy,
+                max_invalid_submit_attempts=effective_config.runtime.max_invalid_submit_attempts,
+            )
             tool_registry = ToolRegistry(tool_ctx)
 
             def _api_log(line: str, task_id: str = task.task_id) -> None:
@@ -233,6 +239,12 @@ def execute_run(
             # Explicit submit tool payload takes precedence over assistant free text.
             if submitted_artifact.get("artifact"):
                 result.final_artifact = submitted_artifact["artifact"]
+            if result.metadata is None:
+                result.metadata = {}
+            if isinstance(result.metadata, dict):
+                result.metadata["invalid_submit_attempts"] = tool_ctx.invalid_submit_attempts
+                if isinstance(tool_ctx.last_invalid_submit_reason, str):
+                    result.metadata["last_invalid_submit_reason"] = tool_ctx.last_invalid_submit_reason
 
             policy_result = apply_artifact_policy(result.final_artifact, task.expected_output_type)
             artifact = result.final_artifact
@@ -268,7 +280,9 @@ def execute_run(
                 f"task={task.task_id} terminated={terminated} "
                 f"output_type={task.expected_output_type} "
                 f"artifact_valid={policy_result.valid} "
-                f"artifact_reason={policy_result.reason}"
+                f"artifact_reason={policy_result.reason} "
+                f"invalid_submit_attempts={tool_ctx.invalid_submit_attempts} "
+                f"last_invalid_submit_reason={tool_ctx.last_invalid_submit_reason or 'none'}"
             )
             append_log(run_log_path, per_task_line)
             if verbose:
