@@ -3,11 +3,12 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from runtime.artifact_policy import apply_artifact_policy
+from runtime.artifact_policy import apply_artifact_policy, is_cannot_produce_output_submission
 
 DEFAULT_OPEN_MAX_LINES = 250
 MAX_OPEN_RANGE_LINES = 400
@@ -20,7 +21,7 @@ class ToolContext:
     workspace_root: Path
     submit_callback: Optional[Callable[[str], None]] = None
     expected_output_type: str = "patch"
-    patch_submit_policy: str = "allow"
+    patch_submit_policy: str = "reject_retry"
     max_invalid_submit_attempts: int = 3
     invalid_submit_attempts: int = 0
     last_invalid_submit_reason: Optional[str] = None
@@ -161,7 +162,8 @@ class ToolRegistry:
                     "name": "submit",
                     "description": (
                         "Submit final artifact and terminate the task. For patch tasks, final_artifact "
-                        "must be either one raw unified diff starting with 'diff --git' or an empty string."
+                        "must be either one raw unified diff starting with 'diff --git' "
+                        "or the exact sentinel form 'CANNOT PRODUCE OUTPUT {reason}'."
                     ),
                     "parameters": {
                         "type": "object",
@@ -289,23 +291,59 @@ class ToolRegistry:
         return {"matches": matches}
 
     def workspace_apply_patch(self, unified_diff: str) -> Dict[str, Any]:
-        """Run `patch` in workspace root and return success + truncated output."""
+        """Run non-interactive `patch` in workspace root with strip-level fallback."""
 
         root = self._workspace_root()
-        with tempfile.NamedTemporaryFile("w", delete=False) as tmp:
+        with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
             tmp.write(unified_diff)
             tmp_path = tmp.name
         try:
-            proc = subprocess.run(
-                ["patch", "-p0", "-d", str(root)],
-                stdin=open(tmp_path, "r"),
-                capture_output=True,
-                text=True,
-                timeout=self.ctx.bash_timeout_s,
-            )
-            success = proc.returncode == 0
-            output = (proc.stdout + proc.stderr)[: self.ctx.output_truncate]
-            return {"success": success, "output": output}
+            attempts: List[str] = []
+            started = time.monotonic()
+            total_timeout = max(1, int(self.ctx.bash_timeout_s))
+            for strip_level in (1, 0):
+                elapsed = int(time.monotonic() - started)
+                remaining_timeout = max(1, total_timeout - elapsed)
+                command = [
+                    "patch",
+                    "--batch",
+                    "--forward",
+                    f"-p{strip_level}",
+                    "-d",
+                    str(root),
+                    "-i",
+                    tmp_path,
+                ]
+                try:
+                    proc = subprocess.run(
+                        command,
+                        capture_output=True,
+                        text=True,
+                        timeout=remaining_timeout,
+                    )
+                except subprocess.TimeoutExpired:
+                    attempts.append(
+                        f"patch -p{strip_level}: timeout after {remaining_timeout}s"
+                    )
+                    break
+
+                attempt_output = (proc.stdout + proc.stderr).strip()
+                attempts.append(
+                    f"patch -p{strip_level}: returncode={proc.returncode}\n{attempt_output}"
+                )
+                if proc.returncode == 0:
+                    combined = "\n\n".join(attempts)
+                    return {
+                        "success": True,
+                        "output": combined[: self.ctx.output_truncate],
+                        "strip_level_used": strip_level,
+                    }
+
+            combined = "\n\n".join(attempts)
+            return {
+                "success": False,
+                "output": combined[: self.ctx.output_truncate],
+            }
         finally:
             os.unlink(tmp_path)
 
@@ -340,9 +378,21 @@ class ToolRegistry:
 
         artifact = final_artifact if isinstance(final_artifact, str) else str(final_artifact)
         output_type = (self.ctx.expected_output_type or "text").strip().lower()
-        submit_policy = (self.ctx.patch_submit_policy or "allow").strip().lower()
+        submit_policy = (self.ctx.patch_submit_policy or "reject_retry").strip().lower()
 
         if output_type == "patch":
+            if is_cannot_produce_output_submission(artifact):
+                if self.ctx.submit_callback:
+                    self.ctx.submit_callback(artifact)
+                return {
+                    "submitted": True,
+                    "artifact_preview": artifact[:2000],
+                    "artifact_bytes": len(artifact.encode("utf-8", errors="ignore")),
+                    "submission_warning": "cannot_produce_output",
+                    "submission_reason": "cannot_produce_output",
+                    "artifact_valid": False,
+                }
+
             policy_result = apply_artifact_policy(artifact, "patch")
             if policy_result.valid:
                 normalized = policy_result.artifact

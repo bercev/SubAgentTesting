@@ -33,7 +33,7 @@ def default_run_config_dict() -> Dict[str, Any]:
             "selector": 5,
             "max_tool_calls": 20,
             "max_wall_time_s": 600,
-            "patch_submit_policy": "allow",
+            "patch_submit_policy": "reject_retry",
             "max_invalid_submit_attempts": 3,
             "agent_architecture_override": None,
             "tool_quality_enabled": True,

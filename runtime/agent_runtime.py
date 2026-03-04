@@ -6,6 +6,14 @@ from runtime.model_backend import GenerationResult, ModelBackend
 from runtime.schemas import AgentResult, BenchmarkTask
 from runtime.tools import ToolRegistry
 
+NO_TOOL_CALL_REPAIR_INSTRUCTION = (
+    "TOOLS MODE RECOVERY: Your previous turn returned zero tool calls. "
+    "You must call at least one tool now. "
+    "Do not answer with plain text. "
+    "If you are done, call submit(final_artifact) with either a valid unified diff "
+    "or CANNOT PRODUCE OUTPUT {reason}."
+)
+
 
 class AgentRuntime:
     """Task execution loop that drives model generation and tool calls."""
@@ -88,6 +96,8 @@ class AgentRuntime:
         tool_call_events: List[Dict[str, Any]] = []
         invalid_submit_attempts = 0
         last_invalid_submit_reason: Optional[str] = None
+        no_tool_call_repair_attempted = False
+        no_tool_call_failure_after_repair = False
 
         while True:
             halt_invalid_submission = False
@@ -125,10 +135,21 @@ class AgentRuntime:
 
             if not result.tool_calls:
                 if self.mode_name == "tools_enabled":
+                    if not no_tool_call_repair_attempted:
+                        no_tool_call_repair_attempted = True
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": NO_TOOL_CALL_REPAIR_INSTRUCTION,
+                            }
+                        )
+                        turn_index += 1
+                        continue
                     # Tools-enabled mode must terminate via explicit submit(...).
                     final_artifact = ""
                     terminated = False
                     loop_exit_reason = "no_tool_calls_without_submit"
+                    no_tool_call_failure_after_repair = True
                 else:
                     # Patch-only mode often terminates by returning final artifact text directly.
                     final_artifact = result.assistant_text
@@ -263,6 +284,8 @@ class AgentRuntime:
                 "budget_exhausted": budget_exhausted,
                 "wall_time_exhausted": wall_time_exhausted,
                 "termination_ack": termination_ack,
+                "no_tool_call_repair_attempted": no_tool_call_repair_attempted,
+                "no_tool_call_failure_after_repair": no_tool_call_failure_after_repair,
                 "events": tool_call_events,
             },
         }

@@ -46,6 +46,14 @@ def test_patch_policy_rejects_non_diff_text():
     assert result.reason == "no_diff_found"
 
 
+def test_patch_policy_classifies_cannot_produce_output_sentinel():
+    raw = "CANNOT PRODUCE OUTPUT {repository snapshot missing target files}"
+    result = apply_artifact_policy(raw, "patch")
+    assert result.valid is False
+    assert result.reason == "cannot_produce_output"
+    assert result.artifact == raw
+
+
 def test_patch_policy_rejects_truncated_patch():
     raw = (
         "diff --git a/example.py b/example.py\n"

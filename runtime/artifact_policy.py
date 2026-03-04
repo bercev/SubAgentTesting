@@ -3,6 +3,8 @@ import re
 from dataclasses import dataclass
 from typing import Callable, Dict
 
+_CANNOT_PRODUCE_OUTPUT_PREFIX = "CANNOT PRODUCE OUTPUT"
+
 
 @dataclass
 class ArtifactPolicyResult:
@@ -27,6 +29,12 @@ def _normalize_patch_artifact(raw_artifact: str) -> ArtifactPolicyResult:
     text = _normalize_newlines(raw_artifact).strip()
     if not text:
         return ArtifactPolicyResult(artifact="", valid=False, reason="empty_output")
+    if is_cannot_produce_output_submission(text):
+        return ArtifactPolicyResult(
+            artifact=text,
+            valid=False,
+            reason="cannot_produce_output",
+        )
 
     candidate = _extract_diff_candidate(text)
     if not candidate:
@@ -141,6 +149,16 @@ def _normalize_newlines(text: str) -> str:
     """Normalize CRLF/CR newlines to LF for deterministic downstream parsing."""
 
     return text.replace("\r\n", "\n").replace("\r", "\n")
+
+
+def is_cannot_produce_output_submission(raw_artifact: str) -> bool:
+    """Return True when artifact uses the explicit non-patch terminal sentinel."""
+
+    text = _normalize_newlines(raw_artifact).strip()
+    if not text.startswith(_CANNOT_PRODUCE_OUTPUT_PREFIX):
+        return False
+    reason = text[len(_CANNOT_PRODUCE_OUTPUT_PREFIX) :].strip()
+    return bool(reason)
 
 
 _POLICIES: Dict[str, Callable[[str], ArtifactPolicyResult]] = {

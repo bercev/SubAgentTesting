@@ -81,6 +81,7 @@ def _make_request(
     tmp_path: Path,
     *,
     allowed_tools: set[str],
+    mode_name: str = "patch_only",
     patch_submit_policy: str = "allow",
     max_invalid_submit_attempts: int = 3,
 ):
@@ -108,7 +109,7 @@ def _make_request(
         task=task,
         system_prompt="system",
         initial_user_message="user",
-        mode_name="patch_only",
+        mode_name=mode_name,
         backend_config={"type": "openrouter", "model": "fake/model"},
         decoding_defaults={},
         tool_registry=registry,
@@ -353,3 +354,97 @@ def test_mini_architecture_reject_retry_exhaustion_sets_terminal_reason(monkeypa
     assert result.metadata["invalid_submit_attempts"] == 1
     assert result.metadata["last_invalid_submit_reason"] == "empty_output"
     assert payload["loop_exit_reason"] == "invalid_submission_retries_exhausted"
+
+
+def test_mini_architecture_tools_enabled_no_tool_calls_repair_retry_recovers(monkeypatch, tmp_path: Path):
+    class _LoopingAgent:
+        def __init__(self, *, model, environment, config, run_config):  # noqa: ANN001
+            del config, run_config
+            self._model = model
+            self._environment = environment
+
+        def run(self, instance_args):  # noqa: ANN001, ANN201
+            messages = [{"role": "user", "content": instance_args["instruction"]}]
+            self._environment.setup()
+            try:
+                while True:
+                    assistant = self._model.query(messages)
+                    actions = assistant.get("extra", {}).get("actions", [])
+                    outputs = [self._environment.execute(action) for action in actions]
+                    messages.extend(self._model.format_observation_messages(assistant, outputs, {}))
+            except (_FakeSubmitted, _FakeLimitsExceeded) as exc:
+                return exc.message
+            finally:
+                self._environment.teardown()
+
+    responses = [
+        GenerationResult(assistant_text="thinking", tool_calls=[]),
+        GenerationResult(
+            assistant_text="",
+            tool_calls=[ToolCall(name="submit", arguments={"final_artifact": "diff --git a/a b/a"})],
+        ),
+    ]
+    backend = _FakeBackend(responses)
+    request, _submitted = _make_request(
+        tmp_path,
+        allowed_tools={"submit"},
+        mode_name="tools_enabled",
+    )
+
+    monkeypatch.setattr("agent_architectures.mini_swe_agent.build_backend", lambda *args, **kwargs: backend)
+    monkeypatch.setattr(
+        "agent_architectures.mini_swe_agent._import_mini_components",
+        lambda: (_FakeAgentConfig, _FakeRunConfig, _LoopingAgent, _FakeSubmitted, _FakeLimitsExceeded),
+    )
+
+    result = MiniSweAgentArchitecture().run_task(request)
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is True
+    assert payload["loop_exit_reason"] == "submitted"
+    assert payload["no_tool_call_repair_attempted"] is True
+    assert payload["no_tool_call_failure_after_repair"] is False
+
+
+def test_mini_architecture_tools_enabled_no_tool_calls_after_retry_fails(monkeypatch, tmp_path: Path):
+    class _LoopingAgent:
+        def __init__(self, *, model, environment, config, run_config):  # noqa: ANN001
+            del config, run_config
+            self._model = model
+            self._environment = environment
+
+        def run(self, instance_args):  # noqa: ANN001, ANN201
+            messages = [{"role": "user", "content": instance_args["instruction"]}]
+            self._environment.setup()
+            try:
+                self._model.query(messages)
+                return {"submission": ""}
+            except (_FakeSubmitted, _FakeLimitsExceeded) as exc:
+                return exc.message
+            finally:
+                self._environment.teardown()
+
+    responses = [
+        GenerationResult(assistant_text="thinking", tool_calls=[]),
+        GenerationResult(assistant_text="still thinking", tool_calls=[]),
+    ]
+    backend = _FakeBackend(responses)
+    request, _submitted = _make_request(
+        tmp_path,
+        allowed_tools={"submit"},
+        mode_name="tools_enabled",
+    )
+
+    monkeypatch.setattr("agent_architectures.mini_swe_agent.build_backend", lambda *args, **kwargs: backend)
+    monkeypatch.setattr(
+        "agent_architectures.mini_swe_agent._import_mini_components",
+        lambda: (_FakeAgentConfig, _FakeRunConfig, _LoopingAgent, _FakeSubmitted, _FakeLimitsExceeded),
+    )
+
+    result = MiniSweAgentArchitecture().run_task(request)
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is False
+    assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
+    assert payload["no_tool_call_repair_attempted"] is True
+    assert payload["no_tool_call_failure_after_repair"] is True

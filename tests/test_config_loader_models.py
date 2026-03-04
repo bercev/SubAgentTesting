@@ -40,7 +40,7 @@ def test_normalize_run_config_keeps_params_maps():
     assert cfg.runtime.tool_quality_weights.policy_quality == 0.25
     assert cfg.runtime.tool_quality_weights.termination_quality == 0.20
     assert cfg.runtime.tool_quality_weights.budget_quality == 0.10
-    assert cfg.runtime.patch_submit_policy == "allow"
+    assert cfg.runtime.patch_submit_policy == "reject_retry"
     assert cfg.runtime.max_invalid_submit_attempts == 3
 
 

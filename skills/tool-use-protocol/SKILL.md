@@ -3,7 +3,7 @@ Tool Use Protocol
 - Use tools when they reduce uncertainty.
 - Treat tool outputs as intermediate state. Final output in tools mode must be a submit(final_artifact) call.
 - Never end with prose/explanations in tools mode. Always use submit(...).
-- If you cannot produce a valid patch, call submit("").
+- If you cannot produce a valid patch, call submit("CANNOT PRODUCE OUTPUT {reason}").
 
 Tool Signatures (human-readable)
 

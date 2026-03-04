@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 from runtime.tools import ToolContext, ToolRegistry
 
@@ -138,3 +139,67 @@ def test_workspace_open_clamps_oversized_explicit_range(monkeypatch, tmp_path: P
     assert result["content"].startswith("row 10\n")
     assert "row 409\n" in result["content"]
     assert "row 410\n" not in result["content"]
+
+
+def test_workspace_apply_patch_uses_p1_when_it_succeeds(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    seen_cmds: list[list[str]] = []
+
+    def _fake_run(cmd, capture_output, text, timeout):  # noqa: ANN001, ANN201
+        del capture_output, text, timeout
+        seen_cmds.append(list(cmd))
+        return SimpleNamespace(returncode=0, stdout="applied", stderr="")
+
+    monkeypatch.setattr("runtime.tools.subprocess.run", _fake_run)
+
+    result = registry.workspace_apply_patch("diff --git a/a b/a\n")
+
+    assert result["success"] is True
+    assert result["strip_level_used"] == 1
+    assert len(seen_cmds) == 1
+    assert "--batch" in seen_cmds[0]
+    assert "--forward" in seen_cmds[0]
+    assert "-p1" in seen_cmds[0]
+
+
+def test_workspace_apply_patch_falls_back_to_p0_after_p1_failure(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    seen_cmds: list[list[str]] = []
+
+    def _fake_run(cmd, capture_output, text, timeout):  # noqa: ANN001, ANN201
+        del capture_output, text, timeout
+        seen_cmds.append(list(cmd))
+        if "-p1" in cmd:
+            return SimpleNamespace(returncode=1, stdout="", stderr="p1 failed")
+        return SimpleNamespace(returncode=0, stdout="p0 applied", stderr="")
+
+    monkeypatch.setattr("runtime.tools.subprocess.run", _fake_run)
+
+    result = registry.workspace_apply_patch("diff --git a/a b/a\n")
+
+    assert result["success"] is True
+    assert result["strip_level_used"] == 0
+    assert len(seen_cmds) == 2
+    assert "-p1" in seen_cmds[0]
+    assert "-p0" in seen_cmds[1]
+    assert "p1 failed" in result["output"]
+    assert "p0 applied" in result["output"]
+
+
+def test_workspace_apply_patch_reports_clean_failure_when_all_strip_levels_fail(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+
+    def _fake_run(cmd, capture_output, text, timeout):  # noqa: ANN001, ANN201
+        del cmd, capture_output, text, timeout
+        return SimpleNamespace(returncode=1, stdout="", stderr="failed")
+
+    monkeypatch.setattr("runtime.tools.subprocess.run", _fake_run)
+
+    result = registry.workspace_apply_patch("diff --git a/a b/a\n")
+
+    assert result["success"] is False
+    assert "patch -p1: returncode=1" in result["output"]
+    assert "patch -p0: returncode=1" in result["output"]

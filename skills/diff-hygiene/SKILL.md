@@ -10,7 +10,7 @@ Diff Hygiene
   - Contains no explanation text before/after the diff
   - Ends with a trailing newline
 - If the patch is malformed or incomplete, fix it before submit(...).
-- If you cannot produce a valid patch, submit("").
+- If you cannot produce a valid patch, submit("CANNOT PRODUCE OUTPUT {reason}").
 
 Allowed Tools:
 - workspace_apply_patch

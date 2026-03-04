@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from runtime.tools import ToolContext, ToolRegistry
 
 
@@ -78,6 +80,30 @@ def test_submit_patch_reject_retry_accepts_valid_diff_and_normalizes():
     assert captured["artifact"].startswith("diff --git a/a b/a")
     assert captured["artifact"].endswith("\n")
     assert registry.ctx.invalid_submit_attempts == 0
+
+
+@pytest.mark.parametrize("policy", ["allow", "reject_retry", "reject_fast"])
+def test_submit_patch_accepts_cannot_produce_output_sentinel_across_policies(policy: str):
+    registry, captured = _make_registry(policy=policy)
+    sentinel = "CANNOT PRODUCE OUTPUT {missing reproduction and failing test context}"
+
+    result = registry.submit(sentinel)
+
+    assert result["submitted"] is True
+    assert result["submission_reason"] == "cannot_produce_output"
+    assert result["artifact_valid"] is False
+    assert captured["artifact"] == sentinel
+    assert registry.ctx.invalid_submit_attempts == 0
+
+
+def test_submit_patch_reject_retry_still_rejects_arbitrary_non_diff_text():
+    registry, captured = _make_registry(policy="reject_retry")
+
+    result = registry.submit("I could not figure this out")
+
+    assert "error" in result
+    assert result["invalid_submission_reason"] == "no_diff_found"
+    assert "artifact" not in captured
 
 
 def test_submit_non_patch_output_is_unconditionally_accepted():

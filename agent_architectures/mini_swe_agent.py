@@ -18,6 +18,14 @@ from agent_architectures.telemetry_adapter import (
     serialize_tool_message,
 )
 
+NO_TOOL_CALL_REPAIR_INSTRUCTION = (
+    "TOOLS MODE RECOVERY: Your previous turn returned zero tool calls. "
+    "You must call at least one tool now. "
+    "Do not answer with plain text. "
+    "If you are done, call submit(final_artifact) with either a valid unified diff "
+    "or CANNOT PRODUCE OUTPUT {reason}."
+)
+
 
 def _import_mini_components() -> tuple[Any, Any, Any, Any, Any]:
     """Import mini-swe-agent runtime components lazily.
@@ -139,6 +147,8 @@ class _MiniRunState:
     submitted_artifact: str = ""
     invalid_submit_attempts: int = 0
     last_invalid_submit_reason: str = ""
+    no_tool_call_repair_attempted: bool = False
+    no_tool_call_failure_after_repair: bool = False
 
 
 class _MiniFunctionCallingModel:
@@ -208,7 +218,24 @@ class _MiniFunctionCallingModel:
             decoding=self._decoding_defaults,
         )
 
+        if not result.tool_calls and self._mode_name == "tools_enabled":
+            if not self._run_state.no_tool_call_repair_attempted:
+                self._run_state.no_tool_call_repair_attempted = True
+                repaired_messages = list(backend_messages)
+                repaired_messages.append(
+                    {"role": "user", "content": NO_TOOL_CALL_REPAIR_INSTRUCTION}
+                )
+                result = self._backend.generate(
+                    repaired_messages,
+                    tools=self._tool_schemas if self._tool_schemas else None,
+                    decoding=self._decoding_defaults,
+                )
+            else:
+                self._run_state.no_tool_call_failure_after_repair = True
+
         if not result.tool_calls:
+            if self._mode_name == "tools_enabled" and self._run_state.no_tool_call_repair_attempted:
+                self._run_state.no_tool_call_failure_after_repair = True
             self._raise_no_tool_calls()
 
         assistant_message: dict[str, Any] = {
@@ -537,18 +564,22 @@ class MiniSweAgentArchitecture(AgentArchitecture):
             elif run_state.budget_exhausted:
                 run_state.loop_exit_reason = "tool_budget_exhausted"
 
+        runtime_payload = build_runtime_payload(
+            mode_name=request.mode_name,
+            loop_exit_reason=run_state.loop_exit_reason,
+            budget_exhausted=run_state.budget_exhausted,
+            wall_time_exhausted=run_state.wall_time_exhausted,
+            termination_ack=run_state.termination_ack,
+            events=run_state.events,
+        )
+        runtime_payload["no_tool_call_repair_attempted"] = run_state.no_tool_call_repair_attempted
+        runtime_payload["no_tool_call_failure_after_repair"] = run_state.no_tool_call_failure_after_repair
+
         metadata: Dict[str, Any] = {
             "terminated": run_state.termination_ack,
             "invalid_submit_attempts": run_state.invalid_submit_attempts,
             "last_invalid_submit_reason": run_state.last_invalid_submit_reason or None,
-            "tool_quality_runtime": build_runtime_payload(
-                mode_name=request.mode_name,
-                loop_exit_reason=run_state.loop_exit_reason,
-                budget_exhausted=run_state.budget_exhausted,
-                wall_time_exhausted=run_state.wall_time_exhausted,
-                termination_ack=run_state.termination_ack,
-                events=run_state.events,
-            ),
+            "tool_quality_runtime": runtime_payload,
         }
         metadata.update(pick_repo_metadata(request.task.resources))
 

@@ -129,6 +129,10 @@ def test_agent_runtime_records_not_allowed_tool_call():
                 assistant_text="diff --git a/a b/a",
                 tool_calls=[],
             ),
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[],
+            ),
         ]
     )
     registry = _ToolRegistryStub({})
@@ -149,6 +153,8 @@ def test_agent_runtime_records_not_allowed_tool_call():
     assert result.metadata["terminated"] is False
     assert result.final_artifact == ""
     assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
+    assert payload["no_tool_call_repair_attempted"] is True
+    assert payload["no_tool_call_failure_after_repair"] is True
     assert len(events) == 1
     assert events[0]["allowed"] is False
     assert events[0]["executed"] is False
@@ -165,6 +171,7 @@ def test_agent_runtime_allows_tools_when_allowlist_is_none():
                 tool_calls=[ToolCall(name="workspace_list", arguments={"path": "."})],
             ),
             GenerationResult(assistant_text="diff --git a/a b/a", tool_calls=[]),
+            GenerationResult(assistant_text="", tool_calls=[]),
         ]
     )
     registry = _ToolRegistryStub({"workspace_list": {"entries": []}})
@@ -196,6 +203,7 @@ def test_agent_runtime_denies_tools_when_allowlist_is_empty_set():
                 tool_calls=[ToolCall(name="workspace_list", arguments={"path": "."})],
             ),
             GenerationResult(assistant_text="diff --git a/a b/a", tool_calls=[]),
+            GenerationResult(assistant_text="", tool_calls=[]),
         ]
     )
     registry = _ToolRegistryStub({"workspace_list": {"entries": []}})
@@ -226,6 +234,7 @@ def test_agent_runtime_marks_nonzero_returncode_tool_result_as_failure():
                 assistant_text="",
                 tool_calls=[ToolCall(name="bash", arguments={"cmd": "pytest"})],
             ),
+            GenerationResult(assistant_text="", tool_calls=[]),
             GenerationResult(assistant_text="", tool_calls=[]),
         ]
     )
@@ -315,6 +324,10 @@ def test_agent_runtime_continues_after_tool_execution_exception():
                 assistant_text="diff --git a/a b/a\nindex 1111111..2222222 100644",
                 tool_calls=[],
             ),
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[],
+            ),
         ]
     )
     registry = _ExplodingToolRegistry()
@@ -342,7 +355,12 @@ def test_agent_runtime_continues_after_tool_execution_exception():
 
 
 def test_agent_runtime_tools_mode_requires_submit_to_finalize():
-    backend = _SequenceBackend([GenerationResult(assistant_text="diff --git a/a b/a", tool_calls=[])])
+    backend = _SequenceBackend(
+        [
+            GenerationResult(assistant_text="diff --git a/a b/a", tool_calls=[]),
+            GenerationResult(assistant_text="", tool_calls=[]),
+        ]
+    )
     registry = _ToolRegistryStub({})
     runtime = AgentRuntime(
         backend=backend,
@@ -361,6 +379,38 @@ def test_agent_runtime_tools_mode_requires_submit_to_finalize():
     assert result.final_artifact == ""
     assert payload["termination_ack"] is False
     assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
+    assert payload["no_tool_call_repair_attempted"] is True
+    assert payload["no_tool_call_failure_after_repair"] is True
+
+
+def test_agent_runtime_tools_mode_no_tool_calls_repair_retry_can_recover():
+    backend = _SequenceBackend(
+        [
+            GenerationResult(assistant_text="need more context", tool_calls=[]),
+            GenerationResult(
+                assistant_text="",
+                tool_calls=[ToolCall(name="submit", arguments={"final_artifact": "diff --git a/a b/a"})],
+            ),
+        ]
+    )
+    registry = _ToolRegistryStub({"submit": {"submitted": True}})
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools={"submit"},
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="tools_enabled",
+    )
+
+    result = runtime.run(task=_task(), system_prompt="prompt", initial_user_message="Fix the bug", tool_schemas=[], decoding_defaults=None)
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is True
+    assert payload["loop_exit_reason"] == "submitted"
+    assert payload["no_tool_call_repair_attempted"] is True
+    assert payload["no_tool_call_failure_after_repair"] is False
 
 
 def test_agent_runtime_patch_only_still_accepts_assistant_text_without_submit():
