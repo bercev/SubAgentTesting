@@ -284,3 +284,73 @@ def test_backend_preview_logs_full_when_enabled(monkeypatch):
     assert "...[truncated]" not in response_line
     assert request_tail in request_line
     assert response_tail in response_line
+
+
+def test_generate_result_includes_finish_reason_and_usage_tokens(monkeypatch):
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse(
+                200,
+                "",
+                payload={
+                    "choices": [
+                        {
+                            "finish_reason": "length",
+                            "message": {"content": "partial"},
+                        }
+                    ],
+                    "usage": {
+                        "prompt_tokens": 100,
+                        "completion_tokens": 4096,
+                        "total_tokens": 4196,
+                    },
+                },
+            )
+
+    monkeypatch.setattr("runtime.model_backend.httpx.Client", _FakeClient)
+    backend = OpenRouterBackend(api_key="test-key", model="openrouter/free", max_retries=0)
+    result = backend.generate(messages=[{"role": "user", "content": "task"}])
+
+    assert result.assistant_text == "partial"
+    assert result.finish_reason == "length"
+    assert result.prompt_tokens == 100
+    assert result.completion_tokens == 4096
+    assert result.total_tokens == 4196
+
+
+def test_generate_result_defaults_usage_metadata_to_none_when_missing(monkeypatch):
+    class _FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def post(self, *args, **kwargs):
+            return _FakeResponse(
+                200,
+                "",
+                payload={"choices": [{"message": {"content": "ok"}}]},
+            )
+
+    monkeypatch.setattr("runtime.model_backend.httpx.Client", _FakeClient)
+    backend = OpenRouterBackend(api_key="test-key", model="openrouter/free", max_retries=0)
+    result = backend.generate(messages=[{"role": "user", "content": "task"}])
+
+    assert result.assistant_text == "ok"
+    assert result.finish_reason is None
+    assert result.prompt_tokens is None
+    assert result.completion_tokens is None
+    assert result.total_tokens is None

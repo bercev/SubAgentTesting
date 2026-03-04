@@ -404,6 +404,8 @@ def test_mini_architecture_tools_enabled_no_tool_calls_repair_retry_recovers(mon
     assert payload["loop_exit_reason"] == "submitted"
     assert payload["no_tool_call_repair_attempted"] is True
     assert payload["no_tool_call_failure_after_repair"] is False
+    assert payload["no_tool_call_cap_hit"] is False
+    assert payload["no_tool_call_terminal_artifact_emitted"] is False
 
 
 def test_mini_architecture_tools_enabled_no_tool_calls_after_retry_fails(monkeypatch, tmp_path: Path):
@@ -445,6 +447,69 @@ def test_mini_architecture_tools_enabled_no_tool_calls_after_retry_fails(monkeyp
     payload = result.metadata["tool_quality_runtime"]
 
     assert result.metadata["terminated"] is False
+    assert result.final_artifact == "CANNOT PRODUCE OUTPUT no_tool_calls_without_submit:after_repair"
     assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
     assert payload["no_tool_call_repair_attempted"] is True
     assert payload["no_tool_call_failure_after_repair"] is True
+    assert payload["no_tool_call_cap_hit"] is False
+    assert payload["no_tool_call_terminal_artifact_emitted"] is True
+
+
+def test_mini_architecture_tools_enabled_no_tool_calls_after_retry_cap_hit(monkeypatch, tmp_path: Path):
+    class _LoopingAgent:
+        def __init__(self, *, model, environment, config, run_config):  # noqa: ANN001
+            del config, run_config
+            self._model = model
+            self._environment = environment
+
+        def run(self, instance_args):  # noqa: ANN001, ANN201
+            messages = [{"role": "user", "content": instance_args["instruction"]}]
+            self._environment.setup()
+            try:
+                self._model.query(messages)
+                return {"submission": ""}
+            except (_FakeSubmitted, _FakeLimitsExceeded) as exc:
+                return exc.message
+            finally:
+                self._environment.teardown()
+
+    responses = [
+        GenerationResult(
+            assistant_text="thinking",
+            tool_calls=[],
+            finish_reason="length",
+            completion_tokens=4096,
+        ),
+        GenerationResult(
+            assistant_text="still thinking",
+            tool_calls=[],
+            finish_reason="stop",
+            completion_tokens=4096,
+        ),
+    ]
+    backend = _FakeBackend(responses)
+    request, _submitted = _make_request(
+        tmp_path,
+        allowed_tools={"submit"},
+        mode_name="tools_enabled",
+    )
+    request.decoding_defaults = {"max_tokens": 4096}
+
+    monkeypatch.setattr("agent_architectures.mini_swe_agent.build_backend", lambda *args, **kwargs: backend)
+    monkeypatch.setattr(
+        "agent_architectures.mini_swe_agent._import_mini_components",
+        lambda: (_FakeAgentConfig, _FakeRunConfig, _LoopingAgent, _FakeSubmitted, _FakeLimitsExceeded),
+    )
+
+    result = MiniSweAgentArchitecture().run_task(request)
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is False
+    assert result.final_artifact == (
+        "CANNOT PRODUCE OUTPUT no_tool_calls_without_submit:completion_cap_reached"
+    )
+    assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
+    assert payload["no_tool_call_repair_attempted"] is True
+    assert payload["no_tool_call_failure_after_repair"] is True
+    assert payload["no_tool_call_cap_hit"] is True
+    assert payload["no_tool_call_terminal_artifact_emitted"] is True

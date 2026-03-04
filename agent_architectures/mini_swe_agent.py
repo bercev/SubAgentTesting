@@ -149,6 +149,8 @@ class _MiniRunState:
     last_invalid_submit_reason: str = ""
     no_tool_call_repair_attempted: bool = False
     no_tool_call_failure_after_repair: bool = False
+    no_tool_call_cap_hit: bool = False
+    no_tool_call_terminal_artifact_emitted: bool = False
 
 
 class _MiniFunctionCallingModel:
@@ -171,6 +173,30 @@ class _MiniFunctionCallingModel:
         self._run_state = run_state
         self._limits_exceeded_exc = limits_exceeded_exc
         self._turn_index = 0
+        self._max_completion_tokens = self._extract_max_completion_tokens(self._decoding_defaults)
+
+    @staticmethod
+    def _extract_max_completion_tokens(decoding_defaults: Mapping[str, Any]) -> int | None:
+        raw = decoding_defaults.get("max_tokens")
+        if isinstance(raw, bool):
+            return None
+        if isinstance(raw, (int, float)):
+            value = int(raw)
+            return value if value > 0 else None
+        return None
+
+    def _is_completion_cap_hit(self, result: Any) -> bool:
+        finish_reason = result.finish_reason if isinstance(result.finish_reason, str) else ""
+        if finish_reason == "length":
+            return True
+        if (
+            isinstance(result.completion_tokens, int)
+            and isinstance(self._max_completion_tokens, int)
+            and self._max_completion_tokens > 0
+            and result.completion_tokens >= self._max_completion_tokens
+        ):
+            return True
+        return False
 
     def serialize(self) -> dict[str, Any]:
         return {
@@ -219,6 +245,9 @@ class _MiniFunctionCallingModel:
         )
 
         if not result.tool_calls and self._mode_name == "tools_enabled":
+            self._run_state.no_tool_call_cap_hit = (
+                self._run_state.no_tool_call_cap_hit or self._is_completion_cap_hit(result)
+            )
             if not self._run_state.no_tool_call_repair_attempted:
                 self._run_state.no_tool_call_repair_attempted = True
                 repaired_messages = list(backend_messages)
@@ -230,12 +259,26 @@ class _MiniFunctionCallingModel:
                     tools=self._tool_schemas if self._tool_schemas else None,
                     decoding=self._decoding_defaults,
                 )
+                if not result.tool_calls:
+                    self._run_state.no_tool_call_cap_hit = (
+                        self._run_state.no_tool_call_cap_hit or self._is_completion_cap_hit(result)
+                    )
             else:
                 self._run_state.no_tool_call_failure_after_repair = True
 
         if not result.tool_calls:
             if self._mode_name == "tools_enabled" and self._run_state.no_tool_call_repair_attempted:
                 self._run_state.no_tool_call_failure_after_repair = True
+                terminal_reason = (
+                    "completion_cap_reached"
+                    if self._run_state.no_tool_call_cap_hit
+                    else "after_repair"
+                )
+                self._run_state.submitted_artifact = (
+                    "CANNOT PRODUCE OUTPUT "
+                    f"no_tool_calls_without_submit:{terminal_reason}"
+                )
+                self._run_state.no_tool_call_terminal_artifact_emitted = True
             self._raise_no_tool_calls()
 
         assistant_message: dict[str, Any] = {
@@ -574,6 +617,10 @@ class MiniSweAgentArchitecture(AgentArchitecture):
         )
         runtime_payload["no_tool_call_repair_attempted"] = run_state.no_tool_call_repair_attempted
         runtime_payload["no_tool_call_failure_after_repair"] = run_state.no_tool_call_failure_after_repair
+        runtime_payload["no_tool_call_cap_hit"] = run_state.no_tool_call_cap_hit
+        runtime_payload["no_tool_call_terminal_artifact_emitted"] = (
+            run_state.no_tool_call_terminal_artifact_emitted
+        )
 
         metadata: Dict[str, Any] = {
             "terminated": run_state.termination_ack,

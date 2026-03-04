@@ -22,6 +22,10 @@ class GenerationResult:
 
     assistant_text: str
     tool_calls: List[ToolCall]
+    finish_reason: Optional[str] = None
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
 
 
 class ModelBackend:
@@ -240,6 +244,28 @@ class OpenRouterBackend(ModelBackend):
         message = choice.get("message", {})
         assistant_text = message.get("content", "") or ""
         raw_tool_calls = message.get("tool_calls") or []
+        finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
+
+        usage = data.get("usage")
+        prompt_tokens: Optional[int] = None
+        completion_tokens: Optional[int] = None
+        total_tokens: Optional[int] = None
+        if isinstance(usage, dict):
+            prompt_raw = usage.get("prompt_tokens")
+            completion_raw = usage.get("completion_tokens")
+            total_raw = usage.get("total_tokens")
+            if isinstance(prompt_raw, bool):
+                prompt_raw = None
+            if isinstance(completion_raw, bool):
+                completion_raw = None
+            if isinstance(total_raw, bool):
+                total_raw = None
+            if isinstance(prompt_raw, (int, float)):
+                prompt_tokens = int(prompt_raw)
+            if isinstance(completion_raw, (int, float)):
+                completion_tokens = int(completion_raw)
+            if isinstance(total_raw, (int, float)):
+                total_tokens = int(total_raw)
 
         tool_calls: List[ToolCall] = []
         for tc in raw_tool_calls:
@@ -268,7 +294,14 @@ class OpenRouterBackend(ModelBackend):
             f" assistant_chars={len(assistant_text)}"
             f" tool_calls={len(tool_calls)}"
         )
-        return GenerationResult(assistant_text=assistant_text, tool_calls=tool_calls)
+        return GenerationResult(
+            assistant_text=assistant_text,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason if isinstance(finish_reason, str) else None,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            total_tokens=total_tokens,
+        )
 
     @classmethod
     def _is_retryable_status(cls, status_code: int, detail: str) -> bool:

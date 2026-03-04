@@ -151,10 +151,12 @@ def test_agent_runtime_records_not_allowed_tool_call():
     events = payload["events"]
 
     assert result.metadata["terminated"] is False
-    assert result.final_artifact == ""
+    assert result.final_artifact == "CANNOT PRODUCE OUTPUT no_tool_calls_without_submit:after_repair"
     assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
     assert payload["no_tool_call_repair_attempted"] is True
     assert payload["no_tool_call_failure_after_repair"] is True
+    assert payload["no_tool_call_cap_hit"] is False
+    assert payload["no_tool_call_terminal_artifact_emitted"] is True
     assert len(events) == 1
     assert events[0]["allowed"] is False
     assert events[0]["executed"] is False
@@ -346,8 +348,10 @@ def test_agent_runtime_continues_after_tool_execution_exception():
     events = payload["events"]
 
     assert result.metadata["terminated"] is False
-    assert result.final_artifact == ""
+    assert result.final_artifact == "CANNOT PRODUCE OUTPUT no_tool_calls_without_submit:after_repair"
     assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
+    assert payload["no_tool_call_cap_hit"] is False
+    assert payload["no_tool_call_terminal_artifact_emitted"] is True
     assert len(events) == 1
     assert events[0]["tool_name"] == "workspace_open"
     assert events[0]["success"] is False
@@ -376,11 +380,13 @@ def test_agent_runtime_tools_mode_requires_submit_to_finalize():
     payload = result.metadata["tool_quality_runtime"]
 
     assert result.metadata["terminated"] is False
-    assert result.final_artifact == ""
+    assert result.final_artifact == "CANNOT PRODUCE OUTPUT no_tool_calls_without_submit:after_repair"
     assert payload["termination_ack"] is False
     assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
     assert payload["no_tool_call_repair_attempted"] is True
     assert payload["no_tool_call_failure_after_repair"] is True
+    assert payload["no_tool_call_cap_hit"] is False
+    assert payload["no_tool_call_terminal_artifact_emitted"] is True
 
 
 def test_agent_runtime_tools_mode_no_tool_calls_repair_retry_can_recover():
@@ -411,6 +417,56 @@ def test_agent_runtime_tools_mode_no_tool_calls_repair_retry_can_recover():
     assert payload["loop_exit_reason"] == "submitted"
     assert payload["no_tool_call_repair_attempted"] is True
     assert payload["no_tool_call_failure_after_repair"] is False
+    assert payload["no_tool_call_cap_hit"] is False
+    assert payload["no_tool_call_terminal_artifact_emitted"] is False
+
+
+def test_agent_runtime_tools_mode_no_tool_calls_cap_hit_emits_cap_terminal_reason():
+    backend = _SequenceBackend(
+        [
+            GenerationResult(
+                assistant_text="thinking",
+                tool_calls=[],
+                finish_reason="stop",
+                completion_tokens=4096,
+            ),
+            GenerationResult(
+                assistant_text="still thinking",
+                tool_calls=[],
+                finish_reason="length",
+                completion_tokens=4096,
+            ),
+        ]
+    )
+    registry = _ToolRegistryStub({})
+    runtime = AgentRuntime(
+        backend=backend,
+        tool_registry=registry,
+        allowed_tools={"submit"},
+        max_tool_calls=5,
+        max_wall_time_s=60,
+        termination_tool="submit",
+        mode_name="tools_enabled",
+    )
+
+    result = runtime.run(
+        task=_task(),
+        system_prompt="prompt",
+        initial_user_message="Fix the bug",
+        tool_schemas=[],
+        decoding_defaults={"max_tokens": 4096},
+    )
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is False
+    assert result.final_artifact == (
+        "CANNOT PRODUCE OUTPUT no_tool_calls_without_submit:completion_cap_reached"
+    )
+    assert payload["loop_exit_reason"] == "no_tool_calls_without_submit"
+    assert payload["no_tool_call_repair_attempted"] is True
+    assert payload["no_tool_call_failure_after_repair"] is True
+    assert payload["no_tool_call_cap_hit"] is True
+    assert payload["no_tool_call_terminal_artifact_emitted"] is True
 
 
 def test_agent_runtime_patch_only_still_accepts_assistant_text_without_submit():

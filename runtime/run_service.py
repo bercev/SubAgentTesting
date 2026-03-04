@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from agent_architectures.constants import ARCHITECTURE_MINI_SWE_AGENT
 from agent_architectures.base import ArchitectureRunRequest
 from agent_architectures.factory import get_agent_architecture, resolve_agent_architecture
 from agents.spec_loader import AgentSpecLoader
@@ -55,20 +56,48 @@ def _preview_text_for_log(text: str, limit: Optional[int] = 400) -> str:
 def _resolve_allowed_tools(
     *,
     mode_name: str,
+    architecture_id: str,
+    profile_explicit_tools: Optional[list[str]],
     profile_allowed_tools: Optional[set[str]],
     tool_registry: ToolRegistry,
 ) -> set[str]:
     """Resolve per-task tool allowlist from mode + profile/skill policy."""
 
+    registry_tool_names = {
+        schema.get("function", {}).get("name")
+        for schema in tool_registry.schemas
+        if isinstance(schema.get("function", {}).get("name"), str)
+    }
+
     if mode_name == "patch_only":
         return {"submit"}
+    # Profile alias: tools: [mini-swe-agent] => full registered toolset.
+    if profile_explicit_tools is not None and ARCHITECTURE_MINI_SWE_AGENT in profile_explicit_tools:
+        return registry_tool_names
+    if architecture_id == ARCHITECTURE_MINI_SWE_AGENT:
+        # mini-swe-agent defaults to full registry tools unless the profile
+        # explicitly sets `tools`.
+        if profile_explicit_tools is None:
+            return registry_tool_names
+        return set(profile_explicit_tools)
     if profile_allowed_tools is None:
-        return {
-            schema.get("function", {}).get("name")
-            for schema in tool_registry.schemas
-            if isinstance(schema.get("function", {}).get("name"), str)
-        }
+        return registry_tool_names
     return set(profile_allowed_tools)
+
+
+def _fallback_cannot_produce_output_artifact(
+    *,
+    loop_exit_reason: str,
+    artifact_reason: str,
+) -> str:
+    """Build deterministic non-empty terminal artifact for no-submit exits."""
+
+    reason = (loop_exit_reason or "unknown").strip() or "unknown"
+    artifact_state = (artifact_reason or "unknown").strip() or "unknown"
+    return (
+        "CANNOT PRODUCE OUTPUT "
+        f"no_submit_without_termination:{reason};artifact_reason:{artifact_state}"
+    )
 
 
 def execute_run(
@@ -211,6 +240,8 @@ def execute_run(
                 )
             allowed = _resolve_allowed_tools(
                 mode_name=mode_name,
+                architecture_id=resolved_architecture,
+                profile_explicit_tools=spec.tools,
                 profile_allowed_tools=allowed_tools,
                 tool_registry=tool_registry,
             )
@@ -246,6 +277,47 @@ def execute_run(
                 if isinstance(tool_ctx.last_invalid_submit_reason, str):
                     result.metadata["last_invalid_submit_reason"] = tool_ctx.last_invalid_submit_reason
 
+            terminated = bool(result.metadata.get("terminated")) if isinstance(result.metadata, dict) else False
+            runtime_tool_payload = (
+                result.metadata.get("tool_quality_runtime")
+                if isinstance(result.metadata, dict)
+                and isinstance(result.metadata.get("tool_quality_runtime"), dict)
+                else None
+            )
+            loop_exit_reason = (
+                runtime_tool_payload.get("loop_exit_reason")
+                if isinstance(runtime_tool_payload, dict)
+                and isinstance(runtime_tool_payload.get("loop_exit_reason"), str)
+                else "unknown"
+            )
+            # Harden tools-mode termination semantics: if the model never submitted and
+            # patch artifact is invalid/empty, emit an explicit non-empty failure sentinel.
+            if mode_name == "tools_enabled" and task.expected_output_type == "patch" and not terminated:
+                pre_fallback_policy = apply_artifact_policy(result.final_artifact, "patch")
+                if (not pre_fallback_policy.valid) and (
+                    pre_fallback_policy.reason != "cannot_produce_output"
+                ):
+                    fallback_artifact = _fallback_cannot_produce_output_artifact(
+                        loop_exit_reason=loop_exit_reason,
+                        artifact_reason=pre_fallback_policy.reason,
+                    )
+                    result.final_artifact = fallback_artifact
+                    if isinstance(result.metadata, dict):
+                        result.metadata["no_submit_fallback_applied"] = True
+                        result.metadata["no_submit_fallback_reason"] = (
+                            f"no_submit_without_termination:{loop_exit_reason}"
+                        )
+                        result.metadata["no_submit_original_artifact_reason"] = pre_fallback_policy.reason
+                    append_log(
+                        run_log_path,
+                        (
+                            f"task={task.task_id} applied_no_submit_fallback=true "
+                            f"loop_exit_reason={loop_exit_reason} "
+                            f"original_artifact_reason={pre_fallback_policy.reason}"
+                        ),
+                        level="WARNING",
+                    )
+
             policy_result = apply_artifact_policy(result.final_artifact, task.expected_output_type)
             artifact = result.final_artifact
             # Patch output remains pass-through; non-patch outputs use normalized artifact.
@@ -275,7 +347,6 @@ def execute_run(
             out_file.write(json.dumps(record) + "\n")
             out_file.flush()
 
-            terminated = result.metadata.get("terminated") if result.metadata else False
             per_task_line = (
                 f"task={task.task_id} terminated={terminated} "
                 f"output_type={task.expected_output_type} "
@@ -288,11 +359,6 @@ def execute_run(
             if verbose:
                 print(per_task_line)
 
-            runtime_tool_payload = (
-                result.metadata.get("tool_quality_runtime")
-                if result.metadata and isinstance(result.metadata.get("tool_quality_runtime"), dict)
-                else None
-            )
             if isinstance(runtime_tool_payload, dict):
                 raw_events = runtime_tool_payload.get("events")
                 if isinstance(raw_events, list):

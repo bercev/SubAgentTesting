@@ -17,7 +17,7 @@ runtime:
   mode: tools_enabled
   selector: 5
   max_tool_calls: 100
-  max_wall_time_s: 600
+  max_wall_time_s: 60
 
 output:
   artifacts_dir: artifacts

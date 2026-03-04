@@ -95,11 +95,13 @@ def _run_once(
     agent_architecture: str | None = None,
     runtime_agent_architecture_override: str | None = None,
     profile_agent_architecture: str = ARCHITECTURE_NONE,
+    profile_tools=_UNSET,
     patch_submit_policy: str = "allow",
     max_invalid_submit_attempts: int = 3,
     workspace_tools_ready: bool = True,
     workspace_kind: str = "repo_checkout",
     workspace_reason: str | None = None,
+    terminated: bool = True,
 ):
     run_config = normalize_run_config(
         {
@@ -134,7 +136,7 @@ def _run_once(
         name="fake-agent",
         backend={"type": "openrouter", "model": "fake/model"},
         prompt_template="Prompt",
-        tools=[],
+        tools=[] if profile_tools is _UNSET else profile_tools,
         skills=[],
         tool_to_skill_map={},
         termination={"tool": "submit", "output_type": "patch"},
@@ -154,7 +156,7 @@ def _run_once(
                 runtime_init_capture["request"] = request
             if build_backend_capture is not None:
                 build_backend_capture["request"] = request
-            metadata = {"terminated": True, "repo": "astropy/astropy"}
+            metadata = {"terminated": terminated, "repo": "astropy/astropy"}
             if runtime_tool_payload is not None:
                 metadata["tool_quality_runtime"] = runtime_tool_payload
             return AgentResult(
@@ -228,6 +230,108 @@ def test_run_service_tools_enabled_uses_full_fallback_when_allowlist_is_none(mon
     assert isinstance(allowed_tools, set)
     assert "submit" in allowed_tools
     assert "bash" in allowed_tools
+
+
+def test_run_service_mini_tools_enabled_defaults_to_full_registry_when_profile_tools_missing(
+    monkeypatch, tmp_path: Path
+):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools={"submit"},
+        profile_agent_architecture="mini-swe-agent",
+        profile_tools=None,
+        runtime_init_capture=captured,
+    )
+
+    allowed_tools = captured["request"].allowed_tools
+    assert isinstance(allowed_tools, set)
+    assert "submit" in allowed_tools
+    assert "bash" in allowed_tools
+    assert "workspace_open" in allowed_tools
+
+
+def test_run_service_mini_tools_enabled_profile_alias_uses_full_registry(
+    monkeypatch, tmp_path: Path
+):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools={"submit"},
+        profile_agent_architecture="mini-swe-agent",
+        profile_tools=["mini-swe-agent"],
+        runtime_init_capture=captured,
+    )
+
+    allowed_tools = captured["request"].allowed_tools
+    assert isinstance(allowed_tools, set)
+    assert "submit" in allowed_tools
+    assert "bash" in allowed_tools
+    assert "workspace_open" in allowed_tools
+    assert "mini-swe-agent" not in allowed_tools
+
+
+def test_run_service_mini_tools_enabled_profile_alias_overrides_explicit_subset(
+    monkeypatch, tmp_path: Path
+):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools={"submit"},
+        profile_agent_architecture="mini-swe-agent",
+        profile_tools=["mini-swe-agent", "submit"],
+        runtime_init_capture=captured,
+    )
+
+    allowed_tools = captured["request"].allowed_tools
+    assert "submit" in allowed_tools
+    assert "bash" in allowed_tools
+    assert "workspace_apply_patch" in allowed_tools
+
+
+def test_run_service_mini_tools_enabled_prefers_explicit_profile_tools_over_skill_allowlist(
+    monkeypatch, tmp_path: Path
+):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools={"submit"},
+        profile_agent_architecture="mini-swe-agent",
+        profile_tools=["submit", "workspace_open"],
+        runtime_init_capture=captured,
+    )
+
+    assert captured["request"].allowed_tools == {"submit", "workspace_open"}
+
+
+def test_run_service_mini_tools_enabled_preserves_explicit_empty_profile_tools(
+    monkeypatch, tmp_path: Path
+):
+    captured = {}
+    _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        loader_allowed_tools={"submit", "workspace_open"},
+        profile_agent_architecture="mini-swe-agent",
+        profile_tools=[],
+        runtime_init_capture=captured,
+    )
+
+    assert captured["request"].allowed_tools == set()
 
 
 def test_run_service_architecture_precedence_cli_override(monkeypatch, tmp_path: Path):
@@ -646,6 +750,84 @@ def test_run_service_passes_patch_submit_policy_into_tool_context(monkeypatch, t
     assert ctx.expected_output_type == "patch"
     assert ctx.patch_submit_policy == "reject_retry"
     assert ctx.max_invalid_submit_attempts == 5
+
+
+def test_run_service_tools_mode_no_submit_empty_patch_uses_cannot_produce_output_fallback(
+    monkeypatch, tmp_path: Path
+):
+    runtime_tool_payload = {
+        "mode": "tools_enabled",
+        "loop_exit_reason": "no_tool_calls_without_submit",
+        "budget_exhausted": False,
+        "wall_time_exhausted": False,
+        "termination_ack": False,
+        "events": [],
+    }
+    record, outcome = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="",
+        mode="tools_enabled",
+        terminated=False,
+        runtime_tool_payload=runtime_tool_payload,
+    )
+
+    assert record["model_patch"].startswith(
+        "CANNOT PRODUCE OUTPUT no_submit_without_termination:no_tool_calls_without_submit"
+    )
+    run_log = outcome.run_log_path.read_text(encoding="utf-8")
+    assert "applied_no_submit_fallback=true" in run_log
+
+
+def test_run_service_tools_mode_no_submit_invalid_text_uses_cannot_produce_output_fallback(
+    monkeypatch, tmp_path: Path
+):
+    runtime_tool_payload = {
+        "mode": "tools_enabled",
+        "loop_exit_reason": "no_tool_calls_without_submit",
+        "budget_exhausted": False,
+        "wall_time_exhausted": False,
+        "termination_ack": False,
+        "events": [],
+    }
+    record, _ = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="I could not complete this task.",
+        mode="tools_enabled",
+        terminated=False,
+        runtime_tool_payload=runtime_tool_payload,
+    )
+
+    assert record["model_patch"].startswith(
+        "CANNOT PRODUCE OUTPUT no_submit_without_termination:no_tool_calls_without_submit"
+    )
+
+
+def test_run_service_tools_mode_preserves_explicit_cannot_produce_output_artifact(
+    monkeypatch, tmp_path: Path
+):
+    runtime_tool_payload = {
+        "mode": "tools_enabled",
+        "loop_exit_reason": "no_tool_calls_without_submit",
+        "budget_exhausted": False,
+        "wall_time_exhausted": False,
+        "termination_ack": False,
+        "events": [],
+    }
+    explicit = "CANNOT PRODUCE OUTPUT no_tool_calls_without_submit:completion_cap_reached"
+    record, outcome = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact=explicit,
+        mode="tools_enabled",
+        terminated=False,
+        runtime_tool_payload=runtime_tool_payload,
+    )
+
+    assert record["model_patch"] == explicit
+    run_log = outcome.run_log_path.read_text(encoding="utf-8")
+    assert "applied_no_submit_fallback=true" not in run_log
 
 
 def test_run_service_writes_tool_quality_artifacts_and_logs(monkeypatch, tmp_path: Path):

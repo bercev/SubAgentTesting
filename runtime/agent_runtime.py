@@ -70,6 +70,34 @@ class AgentRuntime:
             serialized = str(payload)
         return cls._truncate_text(serialized, cls.MAX_TOOL_MESSAGE_CHARS)
 
+    @staticmethod
+    def _resolve_completion_cap(
+        *,
+        decoding_defaults: Optional[Dict[str, Any]],
+        fallback_max_completion_tokens: int,
+    ) -> int | None:
+        if isinstance(decoding_defaults, dict):
+            raw = decoding_defaults.get("max_tokens")
+            if not isinstance(raw, bool) and isinstance(raw, (int, float)):
+                parsed = int(raw)
+                if parsed > 0:
+                    return parsed
+        if fallback_max_completion_tokens > 0:
+            return int(fallback_max_completion_tokens)
+        return None
+
+    @staticmethod
+    def _is_completion_cap_hit(result: GenerationResult, completion_cap: int | None) -> bool:
+        if isinstance(result.finish_reason, str) and result.finish_reason == "length":
+            return True
+        if (
+            completion_cap is not None
+            and isinstance(result.completion_tokens, int)
+            and result.completion_tokens >= completion_cap
+        ):
+            return True
+        return False
+
     def run(
         self,
         task: BenchmarkTask,
@@ -98,6 +126,12 @@ class AgentRuntime:
         last_invalid_submit_reason: Optional[str] = None
         no_tool_call_repair_attempted = False
         no_tool_call_failure_after_repair = False
+        no_tool_call_cap_hit = False
+        no_tool_call_terminal_artifact_emitted = False
+        completion_cap = self._resolve_completion_cap(
+            decoding_defaults=decoding_defaults,
+            fallback_max_completion_tokens=self.max_completion_tokens,
+        )
 
         while True:
             halt_invalid_submission = False
@@ -135,6 +169,9 @@ class AgentRuntime:
 
             if not result.tool_calls:
                 if self.mode_name == "tools_enabled":
+                    no_tool_call_cap_hit = no_tool_call_cap_hit or self._is_completion_cap_hit(
+                        result, completion_cap
+                    )
                     if not no_tool_call_repair_attempted:
                         no_tool_call_repair_attempted = True
                         messages.append(
@@ -146,10 +183,15 @@ class AgentRuntime:
                         turn_index += 1
                         continue
                     # Tools-enabled mode must terminate via explicit submit(...).
-                    final_artifact = ""
+                    terminal_reason = "completion_cap_reached" if no_tool_call_cap_hit else "after_repair"
+                    final_artifact = (
+                        "CANNOT PRODUCE OUTPUT "
+                        f"no_tool_calls_without_submit:{terminal_reason}"
+                    )
                     terminated = False
                     loop_exit_reason = "no_tool_calls_without_submit"
                     no_tool_call_failure_after_repair = True
+                    no_tool_call_terminal_artifact_emitted = True
                 else:
                     # Patch-only mode often terminates by returning final artifact text directly.
                     final_artifact = result.assistant_text
@@ -286,6 +328,8 @@ class AgentRuntime:
                 "termination_ack": termination_ack,
                 "no_tool_call_repair_attempted": no_tool_call_repair_attempted,
                 "no_tool_call_failure_after_repair": no_tool_call_failure_after_repair,
+                "no_tool_call_cap_hit": no_tool_call_cap_hit,
+                "no_tool_call_terminal_artifact_emitted": no_tool_call_terminal_artifact_emitted,
                 "events": tool_call_events,
             },
         }
