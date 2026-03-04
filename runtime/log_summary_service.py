@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 
 from runtime.manifest_store import append_log, manifest_path, now_iso, read_manifest, write_manifest
 
-RUN_ID_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}$")
 LOG_LINE_SPLIT = " | "
 LOG_TIME_FORMAT = "%Y-%m-%d %H:%M:%S"
 TRUNCATED_MARKER = "...[truncated]"
@@ -32,9 +31,10 @@ class RunLogSummaryOutcome:
 
 
 def is_valid_run_id(value: str) -> bool:
-    """Validate canonical timestamp-based run identifier."""
+    """Validate run-id directory names extracted from artifacts layout."""
 
-    return bool(RUN_ID_PATTERN.match(value))
+    text = (value or "").strip()
+    return bool(text and text not in {".", ".."})
 
 
 def derive_run_id_from_run_log(run_log_path: Path, artifacts_dir: Path) -> str:

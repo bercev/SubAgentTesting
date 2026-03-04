@@ -214,17 +214,15 @@ def test_run_service_writes_mini_trace_file_for_mini_architecture(monkeypatch, t
         mini_turn_trace=["First model turn", "Second model turn"],
     )
 
-    trace_path = outcome.predictions_path.parent / "mini_swe_agent_trace.jsonl"
+    trace_path = outcome.predictions_path.parent / "mini_swe_agent_trace.txt"
     assert trace_path.exists()
-    rows = [
-        json.loads(line)
-        for line in trace_path.read_text(encoding="utf-8").splitlines()
-        if line
-    ]
-    assert rows == [
-        {"task_id": "astropy__astropy-12907", "turn": "First model turn"},
-        {"task_id": "astropy__astropy-12907", "turn": "Second model turn"},
-    ]
+    assert trace_path.read_text(encoding="utf-8") == (
+        "Task: astropy__astropy-12907\n"
+        "Turn 1:\n"
+        "First model turn\n\n"
+        "Turn 2:\n"
+        "Second model turn\n\n"
+    )
 
 
 def test_run_service_does_not_write_mini_trace_for_non_mini_architecture(monkeypatch, tmp_path: Path):
@@ -236,11 +234,11 @@ def test_run_service_does_not_write_mini_trace_for_non_mini_architecture(monkeyp
         mini_turn_trace=["Trace should be ignored outside mini architecture"],
     )
 
-    trace_path = outcome.predictions_path.parent / "mini_swe_agent_trace.jsonl"
+    trace_path = outcome.predictions_path.parent / "mini_swe_agent_trace.txt"
     assert not trace_path.exists()
 
 
-def test_run_service_tools_enabled_preserves_explicit_empty_allowlist(monkeypatch, tmp_path: Path):
+def test_run_service_tools_enabled_empty_allowlist_still_includes_submit(monkeypatch, tmp_path: Path):
     captured = {}
     _run_once(
         monkeypatch,
@@ -251,7 +249,7 @@ def test_run_service_tools_enabled_preserves_explicit_empty_allowlist(monkeypatc
         runtime_init_capture=captured,
     )
 
-    assert captured["request"].allowed_tools == set()
+    assert captured["request"].allowed_tools == {"submit"}
 
 
 def test_run_service_tools_enabled_uses_full_fallback_when_allowlist_is_none(monkeypatch, tmp_path: Path):
@@ -370,7 +368,7 @@ def test_run_service_mini_tools_enabled_preserves_explicit_empty_profile_tools(
         runtime_init_capture=captured,
     )
 
-    assert captured["request"].allowed_tools == set()
+    assert captured["request"].allowed_tools == {"submit"}
 
 
 def test_run_service_architecture_precedence_cli_override(monkeypatch, tmp_path: Path):

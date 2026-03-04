@@ -356,6 +356,34 @@ def test_mini_architecture_reject_retry_exhaustion_sets_terminal_reason(monkeypa
     assert payload["loop_exit_reason"] == "invalid_submission_retries_exhausted"
 
 
+def test_mini_architecture_patch_only_no_tool_calls_uses_assistant_text(monkeypatch, tmp_path: Path):
+    responses = [
+        GenerationResult(
+            assistant_text="diff --git a/a b/a\n--- a/a\n+++ b/a\n@@ -1 +1 @@\n-a\n+b\n",
+            tool_calls=[],
+        )
+    ]
+    backend = _FakeBackend(responses)
+    request, _submitted = _make_request(
+        tmp_path,
+        allowed_tools={"submit"},
+        mode_name="patch_only",
+    )
+
+    monkeypatch.setattr("agent_architectures.mini_swe_agent.build_backend", lambda *args, **kwargs: backend)
+    monkeypatch.setattr(
+        "agent_architectures.mini_swe_agent._import_mini_components",
+        lambda: (_FakeAgentConfig, _FakeRunConfig, _FakeDefaultAgent, _FakeSubmitted, _FakeLimitsExceeded),
+    )
+
+    result = MiniSweAgentArchitecture().run_task(request)
+    payload = result.metadata["tool_quality_runtime"]
+
+    assert result.metadata["terminated"] is True
+    assert result.final_artifact.startswith("diff --git a/a b/a")
+    assert payload["loop_exit_reason"] == "no_tool_calls"
+
+
 def test_mini_architecture_tools_enabled_no_tool_calls_repair_retry_recovers(monkeypatch, tmp_path: Path):
     class _LoopingAgent:
         def __init__(self, *, model, environment, config, run_config):  # noqa: ANN001

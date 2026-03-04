@@ -9,6 +9,7 @@ CRITICAL OUTPUT RULES (MUST FOLLOW EXACTLY):
 - Do NOT include git-format-patch / email trailers (for example a final `-- ` line followed by a version string).
 - The first characters of your response MUST be "diff --git".
 - End the response with a trailing newline.
+- If the `submit` tool is available, call `submit(final_artifact)` with this patch as `final_artifact`.
 - Do not call `submit` with an empty artifact. Runtime rejects invalid/empty patch submissions.
 
 PATCH FORMAT REQUIREMENTS:

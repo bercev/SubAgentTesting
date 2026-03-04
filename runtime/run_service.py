@@ -56,6 +56,7 @@ def _preview_text_for_log(text: str, limit: Optional[int] = 400) -> str:
 def _resolve_allowed_tools(
     *,
     mode_name: str,
+    termination_tool: str,
     architecture_id: str,
     profile_explicit_tools: Optional[list[str]],
     profile_allowed_tools: Optional[set[str]],
@@ -69,20 +70,22 @@ def _resolve_allowed_tools(
         if isinstance(schema.get("function", {}).get("name"), str)
     }
 
+    termination_tools = {termination_tool} if termination_tool else set()
+
     if mode_name == "patch_only":
-        return {"submit"}
+        return termination_tools or {"submit"}
     # Profile alias: tools: [mini-swe-agent] => full registered toolset.
     if profile_explicit_tools is not None and ARCHITECTURE_MINI_SWE_AGENT in profile_explicit_tools:
-        return registry_tool_names
+        return registry_tool_names | termination_tools
     if architecture_id == ARCHITECTURE_MINI_SWE_AGENT:
         # mini-swe-agent defaults to full registry tools unless the profile
         # explicitly sets `tools`.
         if profile_explicit_tools is None:
-            return registry_tool_names
-        return set(profile_explicit_tools)
+            return registry_tool_names | termination_tools
+        return set(profile_explicit_tools) | termination_tools
     if profile_allowed_tools is None:
-        return registry_tool_names
-    return set(profile_allowed_tools)
+        return registry_tool_names | termination_tools
+    return set(profile_allowed_tools) | termination_tools
 
 
 def _fallback_cannot_produce_output_artifact(
@@ -148,7 +151,7 @@ def execute_run(
     out_path = run_root / "predictions.jsonl"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     telemetry_path = run_root / "tool_telemetry.jsonl"
-    mini_trace_path = run_root / "mini_swe_agent_trace.jsonl"
+    mini_trace_path = run_root / "mini_swe_agent_trace.txt"
     run_log_path = run_root / "run.log"
     append_log(
         run_log_path,
@@ -245,6 +248,7 @@ def execute_run(
                     )
                 allowed = _resolve_allowed_tools(
                     mode_name=mode_name,
+                    termination_tool=termination_tool,
                     architecture_id=resolved_architecture,
                     profile_explicit_tools=spec.tools,
                     profile_allowed_tools=allowed_tools,
@@ -385,19 +389,32 @@ def execute_run(
                     and isinstance(result.metadata, dict)
                     and isinstance(result.metadata.get("mini_turn_trace"), list)
                 ):
-                    for turn_text in result.metadata.get("mini_turn_trace", []):
-                        if not isinstance(turn_text, str) or not turn_text.strip():
+                    trace_rows: list[tuple[int, str]] = []
+                    for turn_offset, turn_payload in enumerate(
+                        result.metadata.get("mini_turn_trace", []),
+                        start=1,
+                    ):
+                        turn_text = ""
+                        turn_index = turn_offset
+                        if isinstance(turn_payload, str):
+                            turn_text = turn_payload
+                        elif isinstance(turn_payload, dict):
+                            raw_turn = turn_payload.get("turn")
+                            if isinstance(raw_turn, str):
+                                turn_text = raw_turn
+                            raw_turn_index = turn_payload.get("turn_index")
+                            if isinstance(raw_turn_index, int) and raw_turn_index > 0:
+                                turn_index = raw_turn_index
+                        if not turn_text.strip():
                             continue
-                        mini_trace_file.write(
-                            json.dumps(
-                                {
-                                    "task_id": task.task_id,
-                                    "turn": turn_text,
-                                }
-                            )
-                            + "\n"
-                        )
-                    mini_trace_file.flush()
+                        trace_rows.append((turn_index, turn_text.strip()))
+                    if trace_rows:
+                        mini_trace_file.write(f"Task: {task.task_id}\n")
+                        for turn_index, turn_text in trace_rows:
+                            mini_trace_file.write(f"Turn {turn_index}:\n")
+                            mini_trace_file.write(turn_text)
+                            mini_trace_file.write("\n\n")
+                        mini_trace_file.flush()
 
                 task_summary = build_task_summary(
                     run_id=run_id,

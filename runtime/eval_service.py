@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,9 +11,6 @@ from runtime.config_loader import apply_run_overrides
 from runtime.config_models import RunConfig
 from runtime.manifest_store import manifest_path, now_iso, read_manifest, write_manifest
 from runtime.metrics import fmt_pct, read_eval_metrics
-
-
-RUN_ID_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{6}$")
 
 
 @dataclass
@@ -33,9 +29,10 @@ class EvalOutcome:
 
 
 def is_valid_run_id(value: str) -> bool:
-    """Validate canonical timestamp-based run id format."""
+    """Validate run-id directory names extracted from artifacts layout."""
 
-    return bool(RUN_ID_PATTERN.match(value))
+    text = (value or "").strip()
+    return bool(text and text not in {".", ".."})
 
 
 def derive_run_id_from_predictions(predictions_path: Path, artifacts_dir: Path) -> str:

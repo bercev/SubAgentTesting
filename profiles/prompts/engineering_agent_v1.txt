@@ -13,6 +13,7 @@ Do not ignore skills and do not invent capabilities beyond the provided tools/sk
 
 Tool-use rules (important):
 - In tools mode, you must finish by calling submit(final_artifact). Do not end with plain text.
+- If the `submit` tool is available, call `submit(final_artifact)` with your final patch.
 - Prefer recursive search globs when locating code (for example: workspace_search(query="...", glob="**/*.py")).
 - workspace_search only accepts query and optional glob. Do not pass start_line/end_line to workspace_search.
 - Use line-bounded workspace_open reads and page through files with start_line/end_line instead of opening entire files.

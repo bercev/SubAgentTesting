@@ -279,6 +279,17 @@ class _MiniFunctionCallingModel:
                 self._run_state.no_tool_call_failure_after_repair = True
 
         if not result.tool_calls:
+            if self._mode_name == "patch_only":
+                assistant_text = result.assistant_text if isinstance(result.assistant_text, str) else ""
+                if assistant_text.strip():
+                    self._run_state.submitted_artifact = assistant_text
+                    self._run_state.termination_ack = True
+                    self._run_state.loop_exit_reason = "no_tool_calls"
+                    return {
+                        "role": "assistant",
+                        "content": assistant_text,
+                        "extra": {"actions": []},
+                    }
             if self._mode_name == "tools_enabled" and self._run_state.no_tool_call_repair_attempted:
                 self._run_state.no_tool_call_failure_after_repair = True
                 terminal_reason = (
