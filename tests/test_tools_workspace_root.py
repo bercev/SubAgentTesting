@@ -90,9 +90,15 @@ def test_workspace_search_skips_default_excluded_directories(monkeypatch, tmp_pa
     (tmp_path / "src").mkdir()
     (tmp_path / "artifacts").mkdir()
     (tmp_path / ".venv").mkdir()
+    (tmp_path / "venv" / "lib").mkdir(parents=True)
+    (tmp_path / "build").mkdir()
+    (tmp_path / "site-packages").mkdir()
     (tmp_path / "src" / "good.py").write_text("TOKEN_MATCH = 1\n", encoding="utf-8")
     (tmp_path / "artifacts" / "noise.txt").write_text("TOKEN_MATCH = 2\n", encoding="utf-8")
     (tmp_path / ".venv" / "noise.py").write_text("TOKEN_MATCH = 3\n", encoding="utf-8")
+    (tmp_path / "venv" / "lib" / "noise.py").write_text("TOKEN_MATCH = 4\n", encoding="utf-8")
+    (tmp_path / "build" / "noise.py").write_text("TOKEN_MATCH = 5\n", encoding="utf-8")
+    (tmp_path / "site-packages" / "noise.py").write_text("TOKEN_MATCH = 6\n", encoding="utf-8")
 
     registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
     result = registry.workspace_search("TOKEN_MATCH")
@@ -101,6 +107,63 @@ def test_workspace_search_skips_default_excluded_directories(monkeypatch, tmp_pa
     assert "src/good.py" in files
     assert "artifacts/noise.txt" not in files
     assert ".venv/noise.py" not in files
+    assert "venv/lib/noise.py" not in files
+    assert "build/noise.py" not in files
+    assert "site-packages/noise.py" not in files
+
+
+def test_workspace_list_rejects_blocked_path(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "build").mkdir()
+
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    result = registry.workspace_list("build")
+
+    assert result["error"] == "path not allowed"
+    assert result["path"] == "build"
+    assert result["workspace_root"] == str(tmp_path.resolve())
+
+
+def test_workspace_list_filters_blocked_children(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "src").mkdir()
+    (tmp_path / "build").mkdir()
+    (tmp_path / ".venv").mkdir()
+    (tmp_path / "src" / "ok.txt").write_text("ok\n", encoding="utf-8")
+
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    result = registry.workspace_list(".")
+
+    names = [row["name"] for row in result["entries"]]
+    assert "src" in names
+    assert "build" not in names
+    assert ".venv" not in names
+
+
+def test_workspace_open_rejects_blocked_path(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "build").mkdir()
+    (tmp_path / "build" / "noise.txt").write_text("x\n", encoding="utf-8")
+
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    result = registry.workspace_open("build/noise.txt")
+
+    assert result["error"] == "path not allowed"
+    assert result["path"] == "build/noise.txt"
+    assert result["workspace_root"] == str(tmp_path.resolve())
+
+
+def test_workspace_write_rejects_blocked_path(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "dist").mkdir()
+
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+    result = registry.workspace_write("dist/out.txt", "content")
+
+    assert result["error"] == "path not allowed"
+    assert result["path"] == "dist/out.txt"
+    assert result["workspace_root"] == str(tmp_path.resolve())
+    assert not (tmp_path / "dist" / "out.txt").exists()
 
 
 def test_workspace_open_without_end_line_is_capped_and_paginates(monkeypatch, tmp_path: Path):
@@ -203,3 +266,32 @@ def test_workspace_apply_patch_reports_clean_failure_when_all_strip_levels_fail(
     assert result["success"] is False
     assert "patch -p1: returncode=1" in result["output"]
     assert "patch -p0: returncode=1" in result["output"]
+
+
+def test_workspace_apply_patch_rejects_blocked_target_without_subprocess(monkeypatch, tmp_path: Path):
+    monkeypatch.chdir(tmp_path)
+    registry = ToolRegistry(ToolContext(workspace_root=Path(".")))
+
+    called = {"value": False}
+
+    def _fake_run(cmd, capture_output, text, timeout):  # noqa: ANN001, ANN201
+        del cmd, capture_output, text, timeout
+        called["value"] = True
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr("runtime.tools.subprocess.run", _fake_run)
+
+    patch_text = (
+        "diff --git a/build/generated.py b/build/generated.py\n"
+        "--- a/build/generated.py\n"
+        "+++ b/build/generated.py\n"
+        "@@ -1 +1 @@\n"
+        "-old\n"
+        "+new\n"
+    )
+    result = registry.workspace_apply_patch(patch_text)
+
+    assert result["success"] is False
+    assert result["error"] == "path not allowed"
+    assert result["path"] == "build/generated.py"
+    assert called["value"] is False

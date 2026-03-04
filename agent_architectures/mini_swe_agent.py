@@ -151,6 +151,7 @@ class _MiniRunState:
     no_tool_call_failure_after_repair: bool = False
     no_tool_call_cap_hit: bool = False
     no_tool_call_terminal_artifact_emitted: bool = False
+    turn_traces: list[str] = field(default_factory=list)
 
 
 class _MiniFunctionCallingModel:
@@ -235,6 +236,15 @@ class _MiniFunctionCallingModel:
             }
         )
 
+    def _record_turn_trace(self, assistant_text: Any) -> None:
+        """Persist one assistant turn text for lightweight per-run tracing."""
+
+        if not isinstance(assistant_text, str):
+            return
+        if not assistant_text.strip():
+            return
+        self._run_state.turn_traces.append(assistant_text)
+
     def query(self, messages: Sequence[Mapping[str, Any]], **kwargs: Any) -> dict[str, Any]:
         del kwargs
         backend_messages = self._sanitize_messages(messages)
@@ -243,6 +253,7 @@ class _MiniFunctionCallingModel:
             tools=self._tool_schemas if self._tool_schemas else None,
             decoding=self._decoding_defaults,
         )
+        self._record_turn_trace(result.assistant_text)
 
         if not result.tool_calls and self._mode_name == "tools_enabled":
             self._run_state.no_tool_call_cap_hit = (
@@ -259,6 +270,7 @@ class _MiniFunctionCallingModel:
                     tools=self._tool_schemas if self._tool_schemas else None,
                     decoding=self._decoding_defaults,
                 )
+                self._record_turn_trace(result.assistant_text)
                 if not result.tool_calls:
                     self._run_state.no_tool_call_cap_hit = (
                         self._run_state.no_tool_call_cap_hit or self._is_completion_cap_hit(result)
@@ -627,6 +639,7 @@ class MiniSweAgentArchitecture(AgentArchitecture):
             "invalid_submit_attempts": run_state.invalid_submit_attempts,
             "last_invalid_submit_reason": run_state.last_invalid_submit_reason or None,
             "tool_quality_runtime": runtime_payload,
+            "mini_turn_trace": list(run_state.turn_traces),
         }
         metadata.update(pick_repo_metadata(request.task.resources))
 

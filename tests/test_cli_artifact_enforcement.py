@@ -102,6 +102,7 @@ def _run_once(
     workspace_kind: str = "repo_checkout",
     workspace_reason: str | None = None,
     terminated: bool = True,
+    mini_turn_trace: list[str] | None = None,
 ):
     run_config = normalize_run_config(
         {
@@ -159,6 +160,8 @@ def _run_once(
             metadata = {"terminated": terminated, "repo": "astropy/astropy"}
             if runtime_tool_payload is not None:
                 metadata["tool_quality_runtime"] = runtime_tool_payload
+            if mini_turn_trace is not None:
+                metadata["mini_turn_trace"] = list(mini_turn_trace)
             return AgentResult(
                 task_id=request.task.task_id,
                 final_artifact=raw_artifact,
@@ -199,6 +202,42 @@ def _run_once(
     ]
     assert len(records) == 1
     return records[0], outcome
+
+
+def test_run_service_writes_mini_trace_file_for_mini_architecture(monkeypatch, tmp_path: Path):
+    _, outcome = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="CANNOT PRODUCE OUTPUT {reason}",
+        mode="tools_enabled",
+        profile_agent_architecture="mini-swe-agent",
+        mini_turn_trace=["First model turn", "Second model turn"],
+    )
+
+    trace_path = outcome.predictions_path.parent / "mini_swe_agent_trace.jsonl"
+    assert trace_path.exists()
+    rows = [
+        json.loads(line)
+        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        if line
+    ]
+    assert rows == [
+        {"task_id": "astropy__astropy-12907", "turn": "First model turn"},
+        {"task_id": "astropy__astropy-12907", "turn": "Second model turn"},
+    ]
+
+
+def test_run_service_does_not_write_mini_trace_for_non_mini_architecture(monkeypatch, tmp_path: Path):
+    _, outcome = _run_once(
+        monkeypatch,
+        tmp_path,
+        raw_artifact="CANNOT PRODUCE OUTPUT {reason}",
+        profile_agent_architecture="none",
+        mini_turn_trace=["Trace should be ignored outside mini architecture"],
+    )
+
+    trace_path = outcome.predictions_path.parent / "mini_swe_agent_trace.jsonl"
+    assert not trace_path.exists()
 
 
 def test_run_service_tools_enabled_preserves_explicit_empty_allowlist(monkeypatch, tmp_path: Path):

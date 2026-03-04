@@ -10,7 +10,13 @@ prompt_file: ../prompts/engineering_agent_v1.txt
 agent_architecture: mini-swe-agent
 agent_architecture_config: {}
 tools:
-  - mini-swe-agent
+  - submit
+  - workspace_list
+  - workspace_open
+  - workspace_search
+  - workspace_apply_patch
+  - workspace_write
+  - bash
 
 tool_to_skill_map: {}
 termination:

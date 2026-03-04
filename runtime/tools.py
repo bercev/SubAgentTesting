@@ -12,6 +12,22 @@ from runtime.artifact_policy import apply_artifact_policy, is_cannot_produce_out
 
 DEFAULT_OPEN_MAX_LINES = 250
 MAX_OPEN_RANGE_LINES = 400
+DEFAULT_BLOCKED_PATH_DIRNAMES: Tuple[str, ...] = (
+    ".git",
+    ".venv",
+    "venv",
+    "site-packages",
+    "build",
+    "dist",
+    "artifacts",
+    "logs",
+    "summaries",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    "portable_agent_runner.egg-info",
+)
+_DIFF_GIT_HEADER_RE = re.compile(r"^diff --git a/(.+?) b/(.+)$")
 
 
 @dataclass
@@ -27,16 +43,8 @@ class ToolContext:
     last_invalid_submit_reason: Optional[str] = None
     bash_timeout_s: int = 60
     output_truncate: int = 4000
-    search_exclude_dirnames: Tuple[str, ...] = (
-        ".git",
-        ".venv",
-        "artifacts",
-        "logs",
-        "summaries",
-        "__pycache__",
-        ".pytest_cache",
-        "portable_agent_runner.egg-info",
-    )
+    blocked_path_dirnames: Tuple[str, ...] = DEFAULT_BLOCKED_PATH_DIRNAMES
+    search_exclude_dirnames: Tuple[str, ...] = DEFAULT_BLOCKED_PATH_DIRNAMES
 
 
 class ToolRegistry:
@@ -209,6 +217,46 @@ class ToolRegistry:
         target = (root / path).resolve()
         return root, target
 
+    def _is_blocked_relative_path(self, rel_path: Path) -> bool:
+        """Return True when any path segment is part of the blocked path set."""
+
+        blocked = set(self.ctx.blocked_path_dirnames)
+        return any(part in blocked for part in rel_path.parts)
+
+    def _path_not_allowed_error(self, *, path: str, root: Path) -> Dict[str, Any]:
+        """Build a normalized blocked-path error payload."""
+
+        return {
+            "error": "path not allowed",
+            "path": path,
+            "workspace_root": str(root),
+        }
+
+    @staticmethod
+    def _extract_patch_target_paths(unified_diff: str) -> set[str]:
+        """Extract file paths touched by a unified diff payload."""
+
+        targets: set[str] = set()
+        for line in (unified_diff or "").splitlines():
+            match = _DIFF_GIT_HEADER_RE.match(line)
+            if match:
+                left, right = match.group(1).strip(), match.group(2).strip()
+                if left and left != "/dev/null":
+                    targets.add(left)
+                if right and right != "/dev/null":
+                    targets.add(right)
+                continue
+
+            if line.startswith("--- ") or line.startswith("+++ "):
+                raw = line[4:].strip().split("\t", 1)[0].strip()
+                if raw in {"", "/dev/null"}:
+                    continue
+                if raw.startswith("a/") or raw.startswith("b/"):
+                    raw = raw[2:]
+                if raw:
+                    targets.add(raw)
+        return targets
+
     # Tool implementations
 
     def workspace_list(self, path: str) -> Dict[str, Any]:
@@ -217,10 +265,19 @@ class ToolRegistry:
         root, target = self._resolve_target(path)
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
+        rel_target = target.relative_to(root)
+        if self._is_blocked_relative_path(rel_target):
+            return self._path_not_allowed_error(path=path, root=root)
         if not target.exists():
             return {"error": "path not found", "path": path, "workspace_root": str(root)}
         entries = []
         for entry in sorted(target.iterdir()):
+            try:
+                rel_entry = entry.resolve().relative_to(root)
+            except ValueError:
+                continue
+            if self._is_blocked_relative_path(rel_entry):
+                continue
             entries.append({
                 "name": entry.name,
                 "type": "dir" if entry.is_dir() else "file",
@@ -233,6 +290,9 @@ class ToolRegistry:
         root, target = self._resolve_target(path)
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
+        rel_target = target.relative_to(root)
+        if self._is_blocked_relative_path(rel_target):
+            return self._path_not_allowed_error(path=path, root=root)
         if not target.is_file():
             return {"error": "file not found", "path": path, "workspace_root": str(root)}
         with target.open("r", encoding="utf-8", errors="ignore") as f:
@@ -270,7 +330,7 @@ class ToolRegistry:
         root = self._workspace_root()
         pattern = re.compile(query)
         matches = []
-        excluded = set(self.ctx.search_exclude_dirnames)
+        excluded = set(self.ctx.search_exclude_dirnames).union(self.ctx.blocked_path_dirnames)
         for path in root.glob(glob):
             try:
                 rel_parts = path.relative_to(root).parts
@@ -294,6 +354,27 @@ class ToolRegistry:
         """Run non-interactive `patch` in workspace root with strip-level fallback."""
 
         root = self._workspace_root()
+        for patch_path in sorted(self._extract_patch_target_paths(unified_diff)):
+            target = (root / patch_path).resolve()
+            if root not in target.parents and target != root:
+                return {
+                    "success": False,
+                    "error": "path escapes workspace",
+                    "path": patch_path,
+                    "workspace_root": str(root),
+                    "output": f"path escapes workspace: {patch_path}",
+                }
+            rel_target = target.relative_to(root)
+            if self._is_blocked_relative_path(rel_target):
+                blocked_error = self._path_not_allowed_error(path=patch_path, root=root)
+                blocked_error.update(
+                    {
+                        "success": False,
+                        "output": f"path not allowed: {patch_path}",
+                    }
+                )
+                return blocked_error
+
         with tempfile.NamedTemporaryFile("w", delete=False, encoding="utf-8") as tmp:
             tmp.write(unified_diff)
             tmp_path = tmp.name
@@ -353,6 +434,9 @@ class ToolRegistry:
         root, target = self._resolve_target(path)
         if root not in target.parents and target != root:
             return {"error": "path escapes workspace"}
+        rel_target = target.relative_to(root)
+        if self._is_blocked_relative_path(rel_target):
+            return self._path_not_allowed_error(path=path, root=root)
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content, encoding="utf-8")
         return {"written": str(target.relative_to(root))}
