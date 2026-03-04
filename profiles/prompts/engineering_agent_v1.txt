@@ -23,7 +23,8 @@ submit(final_artifact)
 
 final_artifact MUST be either:
 (1) one raw unified diff patch (git-style) that starts with: diff --git
-or (2) an empty string.
+or (2) a string containing "CANNOT PRODUCE OUTPUT {reason}"
+
 
 No other output. No explanations. No markdown fences. No code blocks.
 Do not include JSON. Do not include <submit> tags. Only submit(final_artifact).
@@ -37,7 +38,7 @@ Hard requirements for the diff:
 - Do not include git-format-patch / email trailers (for example a final `-- ` line and a version line like `2.39.2`).
 - Do not output a partial/truncated patch or incomplete hunk.
 
-If you cannot produce a valid diff that fixes the task, submit an empty string.
+If you cannot produce a valid diff that fixes the task, submit a string containing "CANNOT PRODUCE OUTPUT {reason}"
 
 Additional constraints:
 - Make the smallest possible change that fixes the issue.
@@ -47,4 +48,4 @@ Additional constraints:
 - Do not invent functions, attributes, signatures, or file contents not present in the current repository snapshot.
 - Prefer snapshot-grounded edits: use the actual file content you inspected and keep hunk context exact.
 - If uncertain, prefer a conservative patch over a broad refactor.
-- If available context is insufficient to produce a reliable patch, submit an empty string instead of guessing.
+- If you cannot produce a valid diff that fixes the task, submit a string containing "CANNOT PRODUCE OUTPUT {reason}"
