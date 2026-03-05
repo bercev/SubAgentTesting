@@ -6,6 +6,10 @@ End-to-end pipeline for benchmarking code-editing agents on SWE-bench: it bootst
 - Prompt text files live in `profiles/prompts/*.txt`.
 - Execution policy and dataset wiring come from `profiles/runs/*.yaml`.
 - `agent run` produces prediction JSONL files; `agent eval` scores them and stores run artifacts under `artifacts/<run_id>/`.
+- Optional architecture selection:
+  - `agent_architecture: none | mini-swe-agent` in agent YAML
+  - `runtime.agent_architecture_override` in run config
+  - `--agent-architecture` CLI override (highest precedence)
 
 ## Quick Start
 
@@ -45,6 +49,7 @@ Quickstart presets:
 - `profiles/runs/swebench.yaml` for `patch_only` (HF-backed tasks, no local repo workspace required)
 - `profiles/runs/swebench_tools_hf_astropy.yaml` for `tools_enabled` (HF-backed tasks plus local repo checkouts under `./data/swebench_repos/<repo>`, limited to `astropy/astropy`)
 - `profiles/runs/swebench_tools_local.yaml` for `tools_enabled` with a fully local SWE-bench setup (`benchmark.data_root=./data/swebench_local`)
+- `profiles/runs/swebench_mini.yaml` for mini-swe-agent architecture override quickstart
 
 ### 4) Run quick examples (from project root)
 
@@ -74,7 +79,23 @@ agent run \
   --selector 1
 ```
 
+Run using mini-swe-agent architecture via profile (uses `profiles/agents/openrouter_free_mini.yaml`):
+
+```bash
+agent run \
+  --agent profiles/agents/openrouter_free_mini.yaml \
+  --run-config profiles/runs/swebench.yaml \
+  --mode patch_only \
+  --selector 1
+```
+
 `tools_enabled` runs require a tool-ready local repository workspace. For SWE-bench, place repo checkouts under `benchmark.data_root/<repo>` (for the preset above: `./data/swebench_repos/astropy/astropy`). `patch_only` runs can use HF-only task loading.
+
+In `tools_enabled` + patch tasks, if a run exits without a valid patch submission, runtime emits a deterministic non-empty artifact sentinel:
+
+```text
+CANNOT PRODUCE OUTPUT no_submit_without_termination:{reason};artifact_reason:{artifact_state}
+```
 
 Pick the latest predictions file:
 
@@ -244,6 +265,12 @@ Each run also writes:
 
 ```text
 artifacts/<run_id>/manifest.json
+```
+
+When `agent_architecture=mini-swe-agent`, per-turn model text traces are additionally written to:
+
+```text
+artifacts/<run_id>/mini_swe_agent_trace.txt
 ```
 
 `agent run` / `agent predict` are quiet by default for per-task lines. Use `--verbose` to show per-task output.

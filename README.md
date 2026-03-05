@@ -91,6 +91,12 @@ agent run \
 
 `tools_enabled` runs require a tool-ready local repository workspace. For SWE-bench, put repo checkouts under `benchmark.data_root/<repo>` (for the preset above: `./data/swebench_repos/astropy/astropy`). `patch_only` runs can use HF-only task loading.
 
+In `tools_enabled` + patch tasks, if a run exits without a valid patch submission, runtime emits a deterministic non-empty artifact sentinel of the form:
+
+```text
+CANNOT PRODUCE OUTPUT no_submit_without_termination:{reason};artifact_reason:{artifact_state}
+```
+
 Pick the latest predictions file:
 
 ```bash
