@@ -2,10 +2,11 @@ name: minimax2.1
 backend:
   type: openrouter
   model: minimax/minimax-m2.1
-  max_retries: 10
-  initial_backoff_s: 0.5
-  max_backoff_s: 4.0
-prompt_file: ../prompts/engineering_agent_v2.txt
+  max_retries: 3          # was 10 — retries burn wall time; fail fast instead
+  initial_backoff_s: 0.2  # was 0.5 — shorter first retry delay
+  max_backoff_s: 1.5      # was 4.0 — never wait 4s on a retry, that's wall time gone
+
+prompt_file: ../prompts/engineering_agent_minimax_m21.txt
 
 tools:
   - bash
@@ -15,6 +16,7 @@ tools:
   - workspace_open
   - workspace_search
   - workspace_write
+
 skills:
   - tool-use-protocol
   - repo-triage
@@ -22,10 +24,12 @@ skills:
   - test-triage-loop
 
 tool_to_skill_map: {}
+
 termination:
   tool: submit
   output_type: patch
+
 decoding_defaults:
-  temperature: 0.1
-  top_p: 0.95
-  max_tokens: 8192
+  temperature: 0.0    # keep at 0.0 — deterministic is correct for patching
+  top_p: 0.8          # was 0.9 — slightly tighter nucleus, reduces rambling completions
+  max_tokens: 3072    # was 6144 — cuts reasoning length, forces earlier action

@@ -46,6 +46,7 @@ scripts/cli.py
 skills/__init__.py
 skills/loader.py
 tests/test_agent_architecture_factory.py
+tests/test_agent_profiles_tools_swap.py
 tests/test_agent_prompts_contract.py
 tests/test_agent_runtime_tool_quality.py
 tests/test_artifact_policy.py
@@ -69,4 +70,5 @@ tests/test_swebench_adapter_strictness.py
 tests/test_swebench_evaluator_report_path.py
 tests/test_tool_extractor.py
 tests/test_tool_quality.py
+tests/test_tools_submit_policy.py
 tests/test_tools_workspace_root.py
