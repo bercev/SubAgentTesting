@@ -1,6 +1,0 @@
-agent_architectures
-agents
-benchmarks
-runtime
-scripts
-skills
