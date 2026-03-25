@@ -67,3 +67,6 @@ artifacts/
 
 # repos
 data/
+
+# metadata
+portable_agent_runner.egg-info
